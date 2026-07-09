@@ -16,6 +16,7 @@ class ExtractParams:
     pano_width: int = 3840    # native resolution; height is width / 2
     lens_fov: float = 195.0   # per-lens FOV; calibrated by seam-continuity sweep
                               # on GCMR footage, residual error is lens parallax
+    jpeg_quality: int = 2     # ffmpeg -q:v, 2 is near-lossless
 
     @property
     def pano_height(self) -> int:
@@ -51,6 +52,7 @@ class EmbedParams:
     model_name: str = "vit_base_patch16_dinov3.lvd1689m"
     img_size: int = 384       # 24x24 patch grid, enough for grey-on-grey
     batch_size: int = 8
+    device: str | None = None # None = auto: cuda, then mps, then cpu
 
 
 @dataclass(frozen=True)

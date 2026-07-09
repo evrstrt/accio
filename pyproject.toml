@@ -2,12 +2,16 @@
 name = "accio"
 version = "0.1.0"
 description = "Frame preparation for 360 site walks: ingest, review, tracked export"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.26",
     "opencv-python>=4.9",
     "torch>=2.2",
     "timm>=1.0",
+    "fastapi>=0.139.0",
+    "uvicorn[standard]>=0.51.0",
+    "pydantic>=2.13.4",
+    "python-multipart>=0.0.32",
 ]
 
 [dependency-groups]

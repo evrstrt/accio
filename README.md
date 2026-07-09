@@ -50,9 +50,12 @@ Three rules:
   values the dedup POC validated (threshold gap: different walls 0.936, same
   wall one step later 0.965; patch-mean collapses on bare concrete). The
   embedder sits behind a small interface so a swap stays cheap.
-- **Pipeline stays runnable headless.** The server shells into the same code the
-  CLI uses; the GUI is a layer over the store.
+- **One entry point.** The ingest job calls `jobs.pipeline.run_walk()`; the GUI
+  is a layer over the store and never computes science.
 
-## Status
+## Running it
 
-Skeleton only. No code yet.
+```
+ACCIO_OUT=$PWD/out uv run uvicorn accio.server.app:app   # API on :8000
+cd web && npm run dev                                     # UI on :5173
+```

@@ -16,18 +16,18 @@ from .params import GateParams
 
 def vol_score(gray: np.ndarray) -> float:
     """Variance of Laplacian: near zero on flat or smeared areas, high on edges."""
-    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    return float(cv2.Laplacian(gray, cv2.CV_32F).var())
 
 
-def central_band(gray: np.ndarray, band: tuple[float, float]) -> np.ndarray:
+def central_band(img: np.ndarray, band: tuple[float, float]) -> np.ndarray:
     lo, hi = band
-    h = gray.shape[0]
-    return gray[int(h * lo): int(h * hi)]
+    h = img.shape[0]
+    return img[int(h * lo): int(h * hi)]
 
 
 def score_pano(bgr: np.ndarray, params: GateParams) -> float:
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    return vol_score(central_band(gray, params.band))
+    gray = cv2.cvtColor(central_band(bgr, params.band), cv2.COLOR_BGR2GRAY)
+    return vol_score(gray)
 
 
 def windowed_keep(scores: list[float], window: int) -> list[bool]:
