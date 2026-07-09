@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.egg-info/
+node_modules/
+web/dist/
+data/
+.DS_Store
