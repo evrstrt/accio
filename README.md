@@ -6,9 +6,12 @@ clusters, swap or drop picks, export a tracked set for annotation.
 ## Flow
 
 1. **Ingest.** An .insv plus walk metadata (site, building, flat, stage, operator,
-   mount height, date). The pipeline runs as a background job: decimate, gnomonic
-   faces, relative blur gate, DINOv3 embed, greedy dedup per walk. Faces,
-   embeddings and auto-picks land in the store.
+   mount height, date). The original video is copied into the app's data root
+   first: it is the raw ground truth, kept so walks can be re-stitched when
+   parameters improve. The pipeline runs as a background job: MediaSDK stitch
+   (optflow + flowstate) with decimation, gnomonic faces, relative blur gate,
+   DINOv3 embed, greedy dedup per walk. Faces, embeddings and auto-picks land
+   in the store.
 2. **Review.** Kept set in walk order; each duplicate group with its absorbed
    members and cosines. The reviewer swaps the auto-pick or drops a group.
    Every override is logged; a pattern in the overrides gets folded back into
@@ -28,6 +31,15 @@ src/accio/
   server/    FastAPI routes, thin, no logic
 web/         frontend (React + Vite + TypeScript)
 tests/
+```
+
+The app owns one data root (`ACCIO_DATA`, default `./data`):
+
+```
+data/
+  videos/      original .insv uploads, the raw ground truth
+  walks/<id>/  pano/, faces/, manifest.csv, embeddings.npz
+  accio.db     walk metadata + review decisions
 ```
 
 Three rules:
@@ -56,6 +68,6 @@ Three rules:
 ## Running it
 
 ```
-ACCIO_OUT=$PWD/out uv run uvicorn accio.server.app:app   # API on :8000
-cd web && npm run dev                                     # UI on :5173
+uv run uvicorn accio.server.app:app   # API on :8000, data root ./data (ACCIO_DATA)
+cd web && npm run dev                 # UI on :5173
 ```

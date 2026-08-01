@@ -5,8 +5,10 @@ JSON and serve images; the pipeline stays runnable headless and the frontend
 stays swappable.
 
 Run:  uv run uvicorn accio.server.app:app --reload
-Data root defaults to ./out; override with ACCIO_OUT. The decisions DB lives
-at <data root>/accio.db.
+The app owns one data root (default ./data, override with ACCIO_DATA):
+videos/ holds the original .insv files (the raw ground truth, kept so walks
+can be re-stitched when parameters improve), walks/<id>/ the derived frames,
+accio.db the decisions and walk metadata.
 """
 
 import csv
@@ -15,15 +17,19 @@ import shutil
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+import numpy as np
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from ..core import export, extract
+from ..core.params import PipelineParams
 from ..jobs.runner import Runner
 from ..store import db
 
-OUT_ROOT = Path(os.environ.get("ACCIO_OUT", "out")).resolve()
-VIDEO_DIR = OUT_ROOT / "_videos"  # leading underscore: never mistaken for a walk
+DATA_ROOT = Path(os.environ.get("ACCIO_DATA", "data")).resolve()
+VIDEO_DIR = DATA_ROOT / "videos"
+WALKS_ROOT = DATA_ROOT / "walks"
 
 app = FastAPI(title="accio")
 
@@ -34,8 +40,8 @@ _runner_lock = threading.Lock()
 
 def conn():
     if not hasattr(_local, "conn"):
-        OUT_ROOT.mkdir(parents=True, exist_ok=True)
-        _local.conn = db.connect(OUT_ROOT / "accio.db")
+        DATA_ROOT.mkdir(parents=True, exist_ok=True)
+        _local.conn = db.connect(DATA_ROOT / "accio.db")
     return _local.conn
 
 
@@ -43,13 +49,13 @@ def runner() -> Runner:
     global _runner
     with _runner_lock:
         if _runner is None:
-            _runner = Runner(OUT_ROOT)
+            _runner = Runner(WALKS_ROOT)
     return _runner
 
 
 def walk_dir(walk_id: str) -> Path:
-    d = (OUT_ROOT / walk_id).resolve()
-    if not d.is_relative_to(OUT_ROOT) or not (d / "manifest.csv").exists():
+    d = (WALKS_ROOT / walk_id).resolve()
+    if not d.is_relative_to(WALKS_ROOT) or not (d / "manifest.csv").exists():
         raise HTTPException(404, f"unknown walk {walk_id!r}")
     return d
 
@@ -62,7 +68,7 @@ def read_manifest(walk_id: str) -> list[dict]:
 @app.get("/api/walks")
 def walks() -> list[dict]:
     out = []
-    for d in sorted(OUT_ROOT.iterdir()) if OUT_ROOT.exists() else []:
+    for d in sorted(WALKS_ROOT.iterdir()) if WALKS_ROOT.exists() else []:
         if not (d / "manifest.csv").exists():
             continue
         rows = read_manifest(d.name)
@@ -79,8 +85,7 @@ def walks() -> list[dict]:
 
 @app.post("/api/ingest")
 async def ingest(
-    file: UploadFile | None = None,
-    source_path: str = Form(""),
+    files: list[UploadFile] = File([]),
     site: str = Form(""),
     building: str = Form(""),
     stage: str = Form(""),
@@ -88,17 +93,19 @@ async def ingest(
     mount_height_cm: int | None = Form(None),
     shot_date: str = Form(""),
 ) -> dict:
-    if file is not None and file.filename:
-        VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-        video = VIDEO_DIR / Path(file.filename).name
-        with open(video, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-    elif source_path:
-        video = Path(source_path).expanduser()
-        if not video.is_file():
-            raise HTTPException(422, f"no such file: {video}")
-    else:
-        raise HTTPException(422, "provide a video file or a source_path")
+    # Upload is the only ingest: this is a web app, the server has no access
+    # to client paths. Dual-file recordings (_00_ front + _10_ back) arrive
+    # as two uploads; the app owns its copy of the originals.
+    if not files or not files[0].filename:
+        raise HTTPException(422, "upload the .insv file(s)")
+    VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for up in files:
+        dst = VIDEO_DIR / Path(up.filename).name
+        with open(dst, "wb") as f:
+            shutil.copyfileobj(up.file, f)
+        saved.append(dst)
+    video = extract.front_lens(saved)
 
     db.save_walk_meta(conn(), video.stem, video.name, site=site,
                       building=building, stage=stage, operator=operator,
@@ -171,9 +178,23 @@ def overrides(walk_id: str) -> list[dict]:
     return db.override_log(conn(), walk_id)
 
 
+@app.get("/api/walks/{walk_id}/export")
+def export_walk(walk_id: str) -> Response:
+    wdir = walk_dir(walk_id)
+    rows = read_manifest(walk_id)
+    state = db.effective_state(conn(), walk_id)
+    meta = db.walk_meta(conn(), walk_id) or {}
+    npz = wdir / "embeddings.npz"
+    model = str(np.load(npz)["model"]) if npz.exists() else ""
+    data = export.build_zip(walk_id, wdir, rows, state, meta, model,
+                            PipelineParams())
+    return Response(data, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{walk_id}.zip"'})
+
+
 @app.get("/api/walks/{walk_id}/faces/{name}")
 def face_image(walk_id: str, name: str) -> FileResponse:
     path = (walk_dir(walk_id) / "faces" / name).resolve()
-    if not path.is_relative_to(OUT_ROOT) or not path.exists():
+    if not path.is_relative_to(WALKS_ROOT) or not path.exists():
         raise HTTPException(404, "no such face")
     return FileResponse(path)
