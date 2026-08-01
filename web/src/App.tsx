@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchJobs, fetchWalk, fetchWalks, postDecision } from './api'
 import type { Decision, Face, Group, Job, WalkDetail, WalkSummary } from './api'
 import Ingest from './Ingest'
@@ -60,8 +60,8 @@ function GroupRow({ group, onDecision }: {
         <span>
           t={anchor.tSec.toFixed(1)}s y{anchor.yaw}
           {members.length > 0
-            ? ` — ${members.length + 1} candidates, click to change the pick`
-            : ' — no duplicates absorbed'}
+            ? `, ${members.length + 1} candidates, click to change the pick`
+            : ', no duplicates absorbed'}
         </span>
         <button
           className={`drop-btn${dropped ? ' restore' : ''}`}
@@ -72,7 +72,7 @@ function GroupRow({ group, onDecision }: {
         </button>
       </div>
       <div className="strip">
-        {candidates.map((f) => {
+        {candidates.map((f, n) => {
           const isPick = f.idx === pick && !dropped
           return (
             <button
@@ -83,6 +83,7 @@ function GroupRow({ group, onDecision }: {
                 if (!isPick) onDecision({ anchorIdx: anchor.idx, action: 'pick', pickIdx: f.idx })
               }}
             >
+              {n < 9 && <span className="key">{n + 1}</span>}
               <img src={f.url} alt={`t=${f.tSec.toFixed(1)}s y${f.yaw}`} loading="lazy" />
               <span
                 className={`cos${isPick ? ' pick-label' : ''}${
@@ -105,14 +106,72 @@ function KeptGrid({ walk, onDecision }: {
   onDecision: (d: Decision) => void
 }) {
   const [open, setOpen] = useState<number | null>(null)
-  useEffect(() => setOpen(null), [walk.id])
+  const [focus, setFocus] = useState(0)
+  const gridRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { setOpen(null); setFocus(0) }, [walk.id])
+
+  const groups = walk.groups
+
+  // keyboard review: arrows move, enter opens, x drops, 1-9 swap the pick
+  useEffect(() => {
+    const tiles = () =>
+      [...(gridRef.current?.children ?? [])].filter((el) =>
+        el.classList.contains('tile')) as HTMLElement[]
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      if (t?.closest?.('input, textarea, select')) return
+      if (!groups.length) return
+      const g = groups[focus]
+      const move = (d: number) => {
+        e.preventDefault()
+        setFocus((f) => Math.min(groups.length - 1, Math.max(0, f + d)))
+      }
+      const cols = () => {
+        const ts = tiles()
+        let n = 0
+        for (const el of ts) {
+          if (el.offsetTop !== ts[0].offsetTop) break
+          n++
+        }
+        return Math.max(1, n)
+      }
+      // legacy names (Right/Left/.../Return) for automation layers
+      const key = {Right: 'ArrowRight', Left: 'ArrowLeft', Down: 'ArrowDown',
+                   Up: 'ArrowUp', Return: 'Enter'}[e.key] ?? e.key
+      if (key === 'ArrowRight') move(1)
+      else if (key === 'ArrowLeft') move(-1)
+      else if (key === 'ArrowDown') move(cols())
+      else if (key === 'ArrowUp') move(-cols())
+      else if (key === 'Enter' || key === ' ') {
+        e.preventDefault()
+        setOpen((o) => (o === g.anchor.idx ? null : g.anchor.idx))
+      } else if (key === 'Escape') setOpen(null)
+      else if (e.key === 'x') {
+        onDecision({ anchorIdx: g.anchor.idx, action: g.dropped ? 'restore' : 'drop' })
+      } else if (/^[1-9]$/.test(e.key) && open === g.anchor.idx && !g.dropped) {
+        const target = [g.anchor, ...g.members][Number(e.key) - 1]
+        if (target && target.idx !== g.pick) {
+          onDecision({ anchorIdx: g.anchor.idx, action: 'pick', pickIdx: target.idx })
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [groups, focus, open, onDecision])
+
+  useEffect(() => {
+    const tile = [...(gridRef.current?.children ?? [])]
+      .filter((el) => el.classList.contains('tile'))[focus] as HTMLElement | undefined
+    tile?.scrollIntoView({ block: 'nearest' })
+  }, [focus])
 
   return (
     <>
       <div className="section-title">
-        picks, walk order — click a tile to review its duplicate group
+        picks, walk order · arrows move · enter opens · x drops · 1-9 swap pick
       </div>
-      <div className="grid">
+      <div className="grid" ref={gridRef}>
         {walk.groups.map((g, i) => {
           const f = pickFace(g)
           const isOpen = open === g.anchor.idx
@@ -120,9 +179,10 @@ function KeptGrid({ walk, onDecision }: {
           const tile = (
             <button
               key={g.anchor.idx}
-              className={`tile kept${isOpen ? ' open' : ''}${g.dropped ? ' dropped' : ''}`}
+              className={`tile kept${isOpen ? ' open' : ''}${g.dropped ? ' dropped' : ''}${
+                i === focus ? ' focused' : ''}`}
               style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}
-              onClick={() => setOpen(isOpen ? null : g.anchor.idx)}
+              onClick={() => { setFocus(i); setOpen(isOpen ? null : g.anchor.idx) }}
               title={`pano ${f.panoIdx}, yaw ${f.yaw}`}
             >
               <img src={f.url} alt={`pick t=${f.tSec}s`} loading="lazy" />
@@ -213,17 +273,41 @@ export default function App() {
   }, [selected])
 
   return (
-    <div className="app">
-      <nav className="rail">
-        <div className="brand">
-          <b>accio</b> review
+    <div className="frame">
+      <header className="topbar">
+        <div className="tabs">
+          <button
+            className={`tab${!ingesting ? ' active' : ''}`}
+            onClick={() => setIngesting(false)}
+          >
+            Review
+          </button>
+          <button
+            className={`tab${ingesting ? ' active' : ''}`}
+            onClick={() => setIngesting(true)}
+          >
+            New Walk
+          </button>
         </div>
-        <button
-          className={`walk-item new-walk${ingesting ? ' active' : ''}`}
-          onClick={() => setIngesting(true)}
-        >
-          + new walk
-        </button>
+        <div className="crumb">
+          accio <span className="sep">/</span>{' '}
+          <b>{ingesting ? 'new walk' : selected ?? 'no walk'}</b>
+        </div>
+        {!ingesting && selected && walk && (
+          <div className="top-actions">
+            <a
+              className="top-btn"
+              href={`/api/walks/${encodeURIComponent(selected)}/export`}
+              download
+            >
+              Export
+            </a>
+          </div>
+        )}
+      </header>
+      <div className="app">
+      <nav className="rail">
+        <div className="rail-label">Walks</div>
         {jobs.filter((j) => j.status !== 'done').map((j) => <JobItem key={j.id} job={j} />)}
         {walks?.map((w) => (
           <button
@@ -233,8 +317,7 @@ export default function App() {
           >
             <span className="walk-id">{w.id}</span>
             <span className="walk-stats">
-              {w.meta?.building ? `${w.meta.building} · ` : ''}
-              {w.faces} faces · <span className="kept-n">{w.kept} kept</span>
+              <span className="kept-n">{w.kept}</span>/{w.faces}
             </span>
           </button>
         ))}
@@ -261,9 +344,10 @@ export default function App() {
         )}
         {!error && !ingesting && !walk && selected && <div className="empty">loading…</div>}
         {!error && !ingesting && !selected && walks?.length === 0 && (
-          <div className="empty">no walks yet — click “+ new walk”</div>
+          <div className="empty">no walks yet, click “+ new walk”</div>
         )}
       </main>
+      </div>
     </div>
   )
 }

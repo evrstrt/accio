@@ -71,5 +71,19 @@ export const postDecision = (walkId: string, d: Decision) =>
     body: JSON.stringify(d),
   })
 export const fetchJobs = () => req<Job[]>('/api/jobs')
-export const postIngest = (form: FormData) =>
-  req<Job>('/api/ingest', { method: 'POST', body: form })
+
+// XHR instead of fetch: multi-GB .insv uploads need progress events
+export const postIngest = (form: FormData, onProgress?: (frac: number) => void) =>
+  new Promise<Job>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/ingest')
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText))
+      else reject(new Error(`${xhr.status} ${xhr.statusText} for /api/ingest`))
+    }
+    xhr.onerror = () => reject(new Error('network error during upload'))
+    xhr.send(form)
+  })

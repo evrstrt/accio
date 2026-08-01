@@ -13,62 +13,59 @@ const FIELDS = [
 ] as const
 
 export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => void }) {
-  const [file, setFile] = useState<File | null>(null)
-  const [sourcePath, setSourcePath] = useState('')
+  const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!file && !sourcePath) {
-      setError('drop an .insv or give a path')
+    if (!files.length) {
+      setError('drop an .insv first')
       return
     }
     const form = new FormData(formRef.current!)
-    if (file) form.set('file', file)
+    files.forEach((f) => form.append('files', f))
     setBusy(true)
+    setProgress(0)
     setError(null)
-    postIngest(form)
+    postIngest(form, setProgress)
       .then(onSubmitted)
       .catch((err) => setError(String(err)))
       .finally(() => setBusy(false))
   }
 
+  const gb = files.reduce((n, f) => n + f.size, 0) / 1e9
+
   return (
     <form ref={formRef} className="ingest" onSubmit={submit}>
       <div className="section-title">new walk</div>
       <div
-        className={`dropzone${dragOver ? ' over' : ''}${file ? ' has-file' : ''}`}
+        className={`dropzone${dragOver ? ' over' : ''}${files.length ? ' has-file' : ''}`}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
           e.preventDefault()
           setDragOver(false)
-          const f = e.dataTransfer.files[0]
-          if (f) setFile(f)
+          const fs = Array.from(e.dataTransfer.files)
+          if (fs.length) setFiles(fs)
         }}
         onClick={() => document.getElementById('ingest-file')?.click()}
       >
-        {file ? file.name : 'drop an .insv here, or click to browse'}
+        {files.length
+          ? `${files.map((f) => f.name).join(' + ')} (${gb.toFixed(2)} GB)`
+          : 'drop the .insv here (both files for dual-lens walks), or click to browse'}
         <input
           id="ingest-file"
           type="file"
           accept=".insv,video/*"
+          multiple
           hidden
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
         />
       </div>
-      <div className="or">or a path on this machine</div>
-      <input
-        className="field path"
-        name="source_path"
-        placeholder="/path/to/walk.insv"
-        value={sourcePath}
-        onChange={(e) => setSourcePath(e.target.value)}
-        spellCheck={false}
-      />
       <div className="meta-grid">
         {FIELDS.map((f) => (
           <label key={f.name} className="meta-field">
@@ -84,8 +81,18 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
         ))}
       </div>
       {error && <div className="form-error">{error}</div>}
+      {busy && (
+        <div className="upload-progress">
+          <div className="upload-bar">
+            <div className="upload-fill" style={{ width: `${progress * 100}%` }} />
+          </div>
+          <span className="upload-pct">
+            {progress < 1 ? `${Math.round(progress * 100)}%` : 'processing…'}
+          </span>
+        </div>
+      )}
       <button className="go" type="submit" disabled={busy}>
-        {busy ? 'submitting…' : 'accio'}
+        {busy ? 'uploading…' : 'accio'}
       </button>
     </form>
   )

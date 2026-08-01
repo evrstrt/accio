@@ -1,161 +1,326 @@
-/* accio — instrument-panel review UI.
-   Dark charcoal so grey concrete carries the image weight; amber for
-   interaction and borderline cosines; green outlines = kept, the PoC
-   convention. All numerals in Plex Mono: this is a measuring tool. */
+/* accio, styled exactly on zed.dev's theme-builder app (light): full-bleed
+   h-screen layout, 57px cream-50 toolbar, #dadde2 hairline dividers, and a
+   canvas (cream-100/10 + 8px blue dot grid) the content floats on, over
+   warm paper with a 3% noise grain. Offgray text with black for high
+   contrast, accent blue #1348dc, focus ring #094ece80. Type: iA Writer
+   Quattro (body), Lilex (mono, all numerals), IBM Plex Serif (headings),
+   the fonts Zed ships, self-hosted. */
+
+@font-face {
+  font-family: writer;
+  src: url(/fonts/writer-regular.woff2) format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: writer;
+  src: url(/fonts/writer-bold.woff2) format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: zedMono;
+  src: url(/fonts/lilex-regular.woff2) format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
 
 :root {
-  --bg: #131417;
-  --bg-raise: #1a1c20;
-  --bg-hover: #22252b;
-  --line: #2a2d34;
-  --line-strong: #3a3e47;
-  --text: #d6d8dd;
-  --text-dim: #8b8f98;
-  --text-faint: #5c606a;
-  --amber: #e8a13a;
-  --amber-dim: #a97425;
-  --kept: #3fae5a;
-  --kept-dim: #2c7940;
-  --drop: #c25252;
-  --mono: 'IBM Plex Mono', ui-monospace, monospace;
-  --sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --cream-50: #f5f4f3;
+  --cream-100: #d1cfc8;
+  --offgray-50: #e3e4e7;
+  --offgray-100: #ced1d6;
+  --offgray-200: #c0c3ca;
+  --offgray-400: #878e9b;
+  --offgray-500: #727a89;
+  --offgray-700: #535964;
+  --accent-blue: #1348dc;
+  --border: #dadde2;
+  --focus-ring: #094ece80;
+  --green: #00a544;   /* zed green-600 */
+  --red: #e40014;     /* zed red-600 */
+  --amber: #f99c00;   /* zed amber-500 */
+  --black: #000;
+  --white: #fff;
+  --mono: zedMono, ui-monospace, monospace;
+  --sans: writer, ui-sans-serif, system-ui, sans-serif;
 }
 
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
+  background: color-mix(in srgb, var(--cream-100) 20%, var(--white));
+  color: var(--offgray-500);
   font-family: var(--sans);
   font-size: 14px;
+  /* zed's app UI runs writer at NORMAL tracking; tracking-tight is buttons only */
   -webkit-font-smoothing: antialiased;
+}
+
+/* the 3% noise grain zed lays over the paper */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: url(/noise.webp) repeat;
+  background-size: 180px;
+  opacity: 0.03;
 }
 
 #root { min-height: 100vh; }
 
-::selection { background: var(--amber-dim); color: #fff; }
+::selection { background: color-mix(in srgb, var(--accent-blue) 20%, transparent); }
 
-/* ---- app frame ---- */
-
-.app {
-  display: grid;
-  grid-template-columns: 260px 1fr;
-  min-height: 100vh;
+/* zed button base: writer text-sm tracking-tight, instant press-down */
+button {
+  font-family: var(--sans);
+  letter-spacing: -0.025em;
+  cursor: pointer;
 }
 
-/* ---- left rail: walk list ---- */
+button:active:not(:disabled) { transform: translateY(1px) scale(0.99); }
 
-.rail {
-  border-right: 1px solid var(--line);
-  background: var(--bg-raise);
+button:focus { outline: none; }
+button:focus-visible, .field:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ---- zed app frame: full-bleed h-screen column, 57px toolbar ---- */
+
+.frame {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
   position: sticky;
   top: 0;
-  height: 100vh;
-  overflow-y: auto;
+  z-index: 20;
+  height: 57px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  background: var(--cream-50); /* zed nav-background */
+  border-bottom: 1px solid var(--border);
 }
 
-.brand {
-  font-family: var(--mono);
-  font-size: 15px;
-  letter-spacing: 0.08em;
-  padding: 18px 16px 14px;
-  border-bottom: 1px solid var(--line);
+/* zed toolbar tab group: white, divide-x hairlines, h-px underline that
+   turns accent-blue on the active tab */
+.tabs {
+  display: flex;
+  align-items: stretch;
+  background: var(--white);
+  border-right: 1px solid var(--border);
+}
+
+.tab {
+  position: relative;
+  padding: 0 16px;
+  font-size: 14px;
+  color: var(--black);
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  transition: background 120ms;
+}
+
+.tab:last-child { border-right: none; }
+.tab:hover { background: color-mix(in srgb, var(--offgray-100) 40%, transparent); }
+
+.tab::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 1px;
+  background: color-mix(in srgb, var(--offgray-100) 60%, transparent);
+}
+
+.tab.active::after { background: var(--accent-blue); }
+.tab:active:not(:disabled) { transform: none; } /* tabs don't press-down */
+
+/* zed breadcrumb: "New Theme / One Light" */
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  font-size: 14px;
+  color: var(--offgray-500);
   user-select: none;
 }
 
-.brand b { color: var(--amber); font-weight: 600; }
+.crumb b { color: var(--black); font-weight: 400; }
+.crumb .sep { color: var(--offgray-200); }
 
+/* toolbar right side: quiet zed text buttons (Import / Export) */
+.top-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.top-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 14px;
+  letter-spacing: -0.025em;
+  color: var(--black);
+  text-decoration: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  transition: border-color 120ms, background 120ms;
+}
+
+.top-btn:hover {
+  background: color-mix(in srgb, var(--offgray-100) 40%, transparent);
+  border-color: var(--border);
+}
+
+.top-btn:active { transform: translateY(1px) scale(0.99); }
+
+.top-btn:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  flex: 1;
+}
+
+/* ---- left rail: zed sidebar, h-10 rows on white ---- */
+
+.rail {
+  border-right: 1px solid var(--border);
+  background: var(--white);
+  position: sticky;
+  top: 57px;
+  height: calc(100vh - 57px);
+  overflow-y: auto;
+}
+
+.rail-label {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 12px;
+  font-size: 15px;
+  color: var(--black);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+/* zed sidebar rows: borderless, hover wash only */
 .walk-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   width: 100%;
+  height: 40px;
   text-align: left;
   background: none;
   border: none;
-  border-bottom: 1px solid var(--line);
-  border-left: 2px solid transparent;
-  padding: 12px 14px;
-  color: var(--text-dim);
-  font-family: var(--sans);
+  padding: 0 12px;
+  color: var(--offgray-700);
   font-size: 13px;
-  cursor: pointer;
-  transition: background 120ms, border-color 120ms, color 120ms;
+  transition: background 120ms, color 120ms;
 }
 
-.walk-item:hover { background: var(--bg-hover); color: var(--text); }
+.walk-item:active:not(:disabled) { transform: none; }
+
+.walk-item:hover {
+  background: color-mix(in srgb, var(--offgray-100) 40%, transparent);
+  color: var(--black);
+}
 
 .walk-item.active {
-  border-left-color: var(--amber);
-  background: var(--bg-hover);
-  color: var(--text);
+  background: color-mix(in srgb, #dbeafe 60%, transparent); /* zed blue-100 */
+  color: var(--black);
 }
 
 .walk-item .walk-id {
-  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-bottom: 4px;
 }
 
 .walk-item .walk-stats {
+  flex-shrink: 0;
   font-family: var(--mono);
   font-size: 11px;
-  color: var(--text-faint);
+  letter-spacing: 0;
+  color: var(--offgray-400);
 }
 
-.walk-item.active .walk-stats,
-.walk-item:hover .walk-stats { color: var(--text-dim); }
+.kept-n { color: var(--green); }
 
-.kept-n { color: var(--kept); }
+/* ---- main column: zed's canvas, cream-100/10 with the 8px blue dot
+   grid (blue-300 at 60%, r=0.75) the theme preview floats on ---- */
 
-/* ---- main column ---- */
+.main {
+  padding: 0 28px 80px;
+  min-width: 0;
+  background-color: color-mix(in srgb, var(--cream-100) 10%, transparent);
+  background-image: radial-gradient(circle,
+    rgba(144, 197, 255, 0.6) 0.75px, transparent 0.85px);
+  background-size: 8px 8px;
+}
 
-.main { padding: 0 28px 80px; min-width: 0; }
-
+/* app chrome bar, not a hero: nav-background, hairline, plain black title */
 .walk-header {
   position: sticky;
-  top: 0;
+  top: 57px;
   z-index: 10;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(8px);
-  padding: 18px 0 14px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 22px;
+  margin: 0 -28px 22px;
+  padding: 12px 28px 10px;
+  background: var(--cream-50);
+  border-bottom: 1px solid var(--border);
 }
 
 .walk-title {
   font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 8px;
-  letter-spacing: 0.01em;
+  font-weight: 400;
+  color: var(--black);
+  margin: 0 0 6px;
 }
 
 /* the funnel: the pipeline story in one monospace line */
 .funnel {
   font-family: var(--mono);
-  font-size: 12.5px;
-  color: var(--text-dim);
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--offgray-500);
   display: flex;
   align-items: baseline;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.funnel .n { color: var(--text); font-weight: 500; }
-.funnel .n.kept-n { color: var(--kept); }
-.funnel .n.drop-n { color: var(--drop); }
-.funnel .arrow { color: var(--text-faint); }
-.funnel .label { font-size: 11px; color: var(--text-faint); }
+.funnel .n { color: var(--black); }
+.funnel .n.kept-n { color: var(--green); }
+.funnel .n.drop-n { color: var(--red); }
+.funnel .arrow { color: var(--offgray-400); }
+.funnel .label { font-size: 11px; color: var(--offgray-400); }
 
 /* ---- kept grid ---- */
 
 .section-title {
   font-family: var(--mono);
   font-size: 11px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--offgray-400);
   margin: 26px 0 12px;
 }
 
@@ -167,9 +332,9 @@ html, body {
 
 .tile {
   position: relative;
-  background: var(--bg-raise);
-  border: 1px solid var(--line);
-  border-radius: 3px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 4px;
   overflow: hidden;
   cursor: pointer;
   padding: 0;
@@ -189,50 +354,66 @@ html, body {
   object-fit: cover;
 }
 
-.tile.kept { border-color: var(--kept-dim); }
-.tile.kept:hover, .tile.kept.open { border-color: var(--kept); }
-.tile:hover { transform: translateY(-1px); }
+.tile.kept { border-color: color-mix(in srgb, var(--green) 50%, var(--border)); }
+.tile.kept:hover, .tile.kept.open { border-color: var(--green); }
+.tile:hover { border-color: var(--accent-blue); transform: translateY(-1px); }
 
+/* keyboard cursor */
+.tile.focused {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px var(--accent-blue);
+}
+
+/* tile info as zed's little kbd chips, no photo-app gradient */
 .tile .meta {
   position: absolute;
-  left: 0; right: 0; bottom: 0;
+  left: 4px; right: 4px; bottom: 4px;
   display: flex;
   justify-content: space-between;
-  padding: 3px 6px;
+  pointer-events: none;
+}
+
+.tile .meta span {
   font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--text-dim);
-  background: linear-gradient(transparent, rgba(10, 11, 13, 0.85) 40%);
+  font-size: 9px;
+  letter-spacing: 0;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--offgray-700);
+  border: 1px solid color-mix(in srgb, var(--offgray-200) 50%, transparent);
 }
 
 .tile .badge {
   position: absolute;
   top: 5px; right: 5px;
   font-family: var(--mono);
-  font-size: 10px;
-  padding: 1px 5px;
+  font-size: 9px;
+  letter-spacing: 0;
+  padding: 1px 4px;
   border-radius: 2px;
-  background: rgba(10, 11, 13, 0.8);
-  color: var(--text-dim);
-  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--offgray-700);
+  border: 1px solid color-mix(in srgb, var(--offgray-200) 50%, transparent);
 }
 
-.tile.open .badge { color: var(--amber); border-color: var(--amber-dim); }
+.tile.open .badge, .tile .badge.override {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
 
-.tile .badge.override { color: var(--amber); border-color: var(--amber-dim); }
-
-.tile.dropped { border-color: var(--line); }
-.tile.dropped img { opacity: 0.28; filter: grayscale(0.6); }
-.tile.dropped .badge { color: var(--drop); border-color: var(--drop); }
+.tile.dropped { border-color: var(--border); }
+.tile.dropped img { opacity: 0.35; filter: grayscale(0.6); }
+.tile.dropped .badge { color: var(--red); border-color: var(--red); }
 
 /* ---- expanded group row ---- */
 
 .group-row {
   grid-column: 1 / -1;
-  background: var(--bg-raise);
-  border: 1px solid var(--line-strong);
-  border-left: 2px solid var(--kept);
-  border-radius: 3px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--green);
+  border-radius: 4px;
   padding: 12px 14px;
   animation: row-in 180ms ease-out both;
 }
@@ -242,12 +423,13 @@ html, body {
   to { opacity: 1; transform: none; }
 }
 
-.group-row.dropped { border-left-color: var(--drop); }
+.group-row.dropped { border-left-color: var(--red); }
 
 .group-row .group-head {
   font-family: var(--mono);
   font-size: 11.5px;
-  color: var(--text-dim);
+  letter-spacing: 0;
+  color: var(--offgray-500);
   margin-bottom: 10px;
   display: flex;
   justify-content: space-between;
@@ -255,22 +437,26 @@ html, body {
   gap: 12px;
 }
 
+/* zed quiet button: h-6, transparent until hover */
 .drop-btn {
-  font-family: var(--mono);
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 13px;
   background: none;
-  border: 1px solid var(--line-strong);
-  border-radius: 2px;
-  color: var(--drop);
-  padding: 3px 10px;
-  cursor: pointer;
-  transition: border-color 120ms, color 120ms;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--red);
+  transition: border-color 120ms, background 120ms;
 }
 
-.drop-btn:hover { border-color: var(--drop); }
+.drop-btn:hover {
+  background: color-mix(in srgb, var(--offgray-100) 40%, transparent);
+  border-color: var(--border);
+}
 
-.drop-btn.restore { color: var(--kept); }
-.drop-btn.restore:hover { border-color: var(--kept); }
+.drop-btn.restore { color: var(--green); }
 
 .group-row .strip {
   display: flex;
@@ -280,11 +466,27 @@ html, body {
 }
 
 .member {
+  position: relative;
   flex: 0 0 132px;
   background: none;
   border: none;
   padding: 0;
   cursor: pointer;
+}
+
+/* number-key chip on each candidate, zed kbd style */
+.member .key {
+  position: absolute;
+  top: 4px; left: 4px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--offgray-700);
+  border: 1px solid color-mix(in srgb, var(--offgray-200) 50%, transparent);
+  pointer-events: none;
 }
 
 .member:disabled { cursor: default; opacity: 0.5; }
@@ -294,57 +496,51 @@ html, body {
   width: 132px;
   height: 132px;
   object-fit: cover;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border);
   border-radius: 2px;
   transition: border-color 120ms;
 }
 
-.member:not(:disabled):not(.is-pick):hover img { border-color: var(--amber); }
+.member:not(:disabled):not(.is-pick):hover img { border-color: var(--accent-blue); }
 
-.member.is-pick img { border-color: var(--kept); }
+.member.is-pick img { border-color: var(--green); }
 
 .member .cos {
   display: block;
   margin-top: 4px;
   font-family: var(--mono);
   font-size: 11px;
-  color: var(--text-dim);
+  letter-spacing: 0;
+  color: var(--offgray-500);
   text-align: center;
 }
 
 .member .cos.borderline { color: var(--amber); }
-.member .cos.pick-label { color: var(--kept); }
+.member .cos.pick-label { color: var(--green); }
 
-/* ---- rail: new-walk button + job items ---- */
-
-.walk-item.new-walk {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--amber);
-}
-
-.walk-item.new-walk:hover, .walk-item.new-walk.active { color: var(--amber); }
+/* ---- rail: running job rows ---- */
 
 .job-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
+  height: 40px;
+  padding: 0 12px;
   font-family: var(--mono);
   font-size: 11px;
+  letter-spacing: 0;
 }
 
 .job-dot {
   flex: 0 0 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--text-faint);
+  background: var(--offgray-400);
 }
 
-.job-item.running .job-dot { background: var(--amber); animation: pulse 1.2s infinite; }
-.job-item.queued .job-dot { background: var(--text-faint); }
-.job-item.error .job-dot { background: var(--drop); }
+.job-item.running .job-dot { background: var(--accent-blue); animation: pulse 1.2s infinite; }
+.job-item.queued .job-dot { background: var(--offgray-400); }
+.job-item.error .job-dot { background: var(--red); }
 
 @keyframes pulse {
   50% { opacity: 0.3; }
@@ -354,21 +550,22 @@ html, body {
 
 .job-id {
   display: block;
-  color: var(--text-dim);
+  color: var(--offgray-700);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.job-stage { color: var(--text-faint); }
-.job-item.error .job-stage { color: var(--drop); }
+.job-stage { color: var(--offgray-400); }
+.job-item.error .job-stage { color: var(--red); }
 
 /* ---- meta line under walk title ---- */
 
 .meta-line {
   font-family: var(--mono);
   font-size: 11.5px;
-  color: var(--text-faint);
+  letter-spacing: 0;
+  color: var(--offgray-400);
   margin-bottom: 8px;
 }
 
@@ -377,47 +574,47 @@ html, body {
 .ingest { max-width: 560px; padding-top: 8px; }
 
 .dropzone {
-  border: 1px dashed var(--line-strong);
-  border-radius: 3px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--white);
   padding: 36px 20px;
   text-align: center;
   font-family: var(--mono);
   font-size: 12.5px;
-  color: var(--text-dim);
+  letter-spacing: 0;
+  color: var(--offgray-500);
   cursor: pointer;
   transition: border-color 120ms, color 120ms, background 120ms;
 }
 
 .dropzone:hover, .dropzone.over {
-  border-color: var(--amber);
-  color: var(--text);
-  background: var(--bg-raise);
+  border-color: var(--accent-blue);
+  color: var(--black);
+  background: color-mix(in srgb, var(--accent-blue) 3%, var(--white));
 }
 
-.dropzone.has-file { border-color: var(--kept-dim); color: var(--kept); border-style: solid; }
-
-.or {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text-faint);
-  margin: 12px 0 6px;
+.dropzone.has-file {
+  border-color: var(--green);
+  color: var(--green);
+  border-style: solid;
 }
 
 .field {
   width: 100%;
-  background: var(--bg-raise);
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  color: var(--text);
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--black);
   font-family: var(--mono);
   font-size: 12.5px;
+  letter-spacing: 0;
   padding: 8px 10px;
   outline: none;
   transition: border-color 120ms;
 }
 
-.field:focus { border-color: var(--amber-dim); }
-.field::placeholder { color: var(--text-faint); }
+.field:focus { border-color: var(--accent-blue); }
+.field::placeholder { color: var(--offgray-400); }
 
 .meta-grid {
   display: grid;
@@ -430,9 +627,9 @@ html, body {
   display: block;
   font-family: var(--mono);
   font-size: 10.5px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--offgray-400);
   margin-bottom: 4px;
 }
 
@@ -440,24 +637,60 @@ html, body {
   margin-top: 14px;
   font-family: var(--mono);
   font-size: 12px;
-  color: var(--drop);
+  letter-spacing: 0;
+  color: var(--red);
 }
 
-.go {
-  margin-top: 18px;
-  font-family: var(--mono);
-  font-size: 13px;
-  letter-spacing: 0.06em;
-  background: none;
-  color: var(--amber);
-  border: 1px solid var(--amber-dim);
+/* upload progress: thin accent bar + mono percent */
+.upload-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.upload-bar {
+  flex: 1;
+  height: 4px;
   border-radius: 2px;
-  padding: 9px 26px;
-  cursor: pointer;
-  transition: background 120ms, color 120ms;
+  background: color-mix(in srgb, var(--offgray-100) 60%, transparent);
+  overflow: hidden;
 }
 
-.go:hover:not(:disabled) { background: var(--amber); color: #131417; }
+.upload-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent-blue);
+  transition: width 200ms linear;
+}
+
+.upload-pct {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0;
+  color: var(--offgray-500);
+  min-width: 44px;
+  text-align: right;
+}
+
+/* zed primary button: h-8 accent fill with the soft 1px shadow */
+.go {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 18px;
+  height: 32px;
+  padding: 0 20px;
+  font-size: 14px;
+  background: var(--accent-blue);
+  color: var(--offgray-50);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  transition: background 120ms;
+}
+
+.go:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-blue) 88%, var(--black)); }
 .go:disabled { opacity: 0.5; cursor: default; }
 
 /* ---- states ---- */
@@ -465,9 +698,10 @@ html, body {
 .empty, .error {
   padding: 60px 0;
   text-align: center;
-  color: var(--text-faint);
+  color: var(--offgray-400);
   font-family: var(--mono);
   font-size: 13px;
+  letter-spacing: 0;
 }
 
-.error { color: var(--drop); }
+.error { color: var(--red); }
