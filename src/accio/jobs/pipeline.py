@@ -1,8 +1,9 @@
 """The pipeline end to end: one .insv walk -> deduplicated label candidates.
 
-run_walk() writes out/<walk>/pano/, out/<walk>/faces/ and
+run_walk() writes out/<walk>/pano/, out/<walk>/faces/,
 out/<walk>/manifest.csv with a kept flag plus anchor/cosine for every
-absorbed face. The ingest job calls this; there is no other entry point.
+absorbed face, and out/<walk>/embeddings.npz with one row per manifest
+row. The ingest job calls this; there is no other entry point.
 """
 
 import csv
@@ -53,6 +54,11 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
                         for _, _, path in chunk])
         for chunk in batched(records, EMBED_CHUNK)
     ])
+    # embeddings outlive the walk: registry dedup against re-walks, leak checks
+    # and future selection all reuse them. Cosines are only comparable between
+    # walks embedded by the same model, so the model name travels with the rows.
+    np.savez(out / "embeddings.npz",
+             embeddings=embeddings, model=params.embed.model_name)
     result = greedy_dedup(embeddings, params.dedup)
 
     kept = set(result.kept)
