@@ -1,8 +1,8 @@
 """Background ingest: one worker thread, a queue of walks.
 
 Jobs wrap jobs.pipeline.run_walk with status the UI polls. One worker on
-purpose: the embedder holds the GPU, and two ffmpeg stitches at once help
-nobody on a laptop.
+purpose: the embedder holds the GPU, and two emulated MediaSDK containers at
+once help nobody on a laptop.
 """
 
 import itertools

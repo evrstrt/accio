@@ -10,13 +10,13 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ExtractParams:
-    """Dual-fisheye .insv -> decimated equirect panoramas via ffmpeg v360."""
+    """Dual-fisheye .insv -> decimated equirect panoramas via the Insta360
+    MediaSDK container (optflow stitch + flowstate horizon levelling; replaces
+    ffmpeg v360, which left parallax seams and tilted horizons)."""
 
     fps: float = 2.0          # walking pace + full sphere per frame
     pano_width: int = 3840    # native resolution; height is width / 2
-    lens_fov: float = 195.0   # per-lens FOV; calibrated by seam-continuity sweep
-                              # on GCMR footage, residual error is lens parallax
-    jpeg_quality: int = 2     # ffmpeg -q:v, 2 is near-lossless
+    sdk_image: str = "insta360-mediasdk:3.1.1"
 
     @property
     def pano_height(self) -> int:
