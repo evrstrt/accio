@@ -29,9 +29,10 @@ export default function CalibrationModal({ walkId, calib, onClose }: {
         <p className="calib-note">
           Every kept frame here is paired with the raw frame {ms} ms later: the
           same scene, so what they score is what <em>identical</em> means for
-          this walk. τ is set at the {calib.quantile}th percentile of those
-          scores, so a merge needs two frames about as alike as a pair taken
-          {' '}{ms} ms apart.
+          this walk. {calib.samples} panoramas were sampled across the walk, and
+          τ is set at the {calib.quantile}th percentile of the {calib.reference.n}
+          {' '}pairs that gives, so a merge needs two frames about as alike as a
+          pair taken {ms} ms apart.
         </p>
 
         <div className="calib-stats">

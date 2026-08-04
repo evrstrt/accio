@@ -174,12 +174,18 @@ def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
     src = json.loads(src_file.read_text()) if src_file.exists() else {}
     anchors = sum(1 for r in rows if r["kept"] == "1")
     dropped = sum(1 for s in state.values() if s["dropped"])
+    calib = pipeline.read_calibration(wdir) or {}
     return {
         "frames": src.get("frames", 0),
         "seconds": src.get("seconds", 0),
         "panos": len(list(pano_dir.glob(f"{extract.PANO_PREFIX}*{extract.PANO_EXT}"))),
         "sharp": len({r["pano_idx"] for r in rows}),
         "faces": len(rows),
+        # the calibration stage's own output: how alike identical frames were,
+        # over how many pairs, and the threshold that resolves to
+        "pairs": calib.get("reference", {}).get("n", 0),
+        "reference": calib.get("reference", {}).get("median", 0),
+        "calibTau": calib.get("tau", 0),
         "anchors": anchors,
         "absorbed": len(rows) - anchors,
         "dropped": dropped,
@@ -206,7 +212,7 @@ def pipeline_spec(walk_id: str) -> dict:
 # which stage a section of the settings belongs to: editing it invalidates
 # that stage and everything below it
 STAGE_OF = {"extract": "stitch", "gate": "gate", "faces": "faces",
-            "embed": "embed", "dedup": "select"}
+            "embed": "embed", "calib": "calibrate", "dedup": "select"}
 
 
 class GatePatch(BaseModel):
@@ -220,6 +226,11 @@ class FacesPatch(BaseModel):
     yaws: list[int] | None = None
 
 
+class CalibPatch(BaseModel):
+    samples: int | None = Field(None, ge=2, le=200)
+    quantile: float | None = Field(None, gt=0, le=50)
+
+
 class DedupPatch(BaseModel):
     tau: float | None = Field(None, gt=0, lt=1)
     rule: str | None = None      # 'fixed' | 'calibrated'
@@ -229,6 +240,7 @@ class Rerun(BaseModel):
     """Staged settings, by the section of the params they belong to."""
     gate: GatePatch | None = None
     faces: FacesPatch | None = None
+    calib: CalibPatch | None = None
     dedup: DedupPatch | None = None
 
 
@@ -248,10 +260,12 @@ def check(r: Rerun) -> None:
         raise HTTPException(422, f"unknown threshold rule {r.dedup.rule!r}")
 
 
-def merge(params: PipelineParams, r: Rerun) -> tuple[PipelineParams, str | None]:
-    """Fold the patch into the walk's params and name the earliest stage it
-    invalidates. Fields set back to what the walk already ran are not changes."""
-    changed: list[str] = []
+def merge(params: PipelineParams, r: Rerun
+          ) -> tuple[PipelineParams, str | None, set[str]]:
+    """Fold the patch into the walk's params, name the earliest stage it
+    invalidates, and say which fields actually moved. Fields set back to what
+    the walk already ran are not changes."""
+    changed: set[str] = set()
     for section in STAGE_OF:
         patch = getattr(r, section, None)
         if patch is None:
@@ -264,42 +278,34 @@ def merge(params: PipelineParams, r: Rerun) -> tuple[PipelineParams, str | None]
         if not fields:
             continue
         params = replace(params, **{section: replace(current, **fields)})
-        changed.append(STAGE_OF[section])
-    first = min(changed, key=pipeline.STAGES.index, default=None)
-    return params, first
+        changed.update(f"{section}.{k}" for k in fields)
+    stages = {STAGE_OF[f.split(".")[0]] for f in changed}
+    first = min(stages, key=pipeline.STAGES.index, default=None)
+    return params, first, changed
 
 
 @app.post("/api/walks/{walk_id}/rerun")
 def rerun(walk_id: str, r: Rerun) -> dict:
     """Apply staged settings, re-running from the earliest stage they touch.
 
-    A threshold change re-selects from the cached embeddings and returns the new
-    counts straight away. Anything above Select re-renders frames, so it queues
-    on the worker and the canvas follows it stage by stage.
+    Two of them cost nothing to redo: a threshold re-selects from the cached
+    embeddings, and the calibration percentile is a statistic over pairs already
+    measured. Both answer with the new counts straight away. Anything that has
+    to render or measure again queues on the worker and the canvas follows it.
     """
     out = walk_dir(walk_id)
     check(r)
     if runner().busy(walk_id):
         raise HTTPException(409, "this walk is already running")
-    params, first = merge(walk_params(walk_id), r)
+    params, first, changed = merge(walk_params(walk_id), r)
     if first is None:
         return {"changed": False}
-    # the calibrated rule takes its threshold from a measurement; without one it
-    # would save the rule and quietly leave tau where it was
-    if params.dedup.rule == "calibrated" and pipeline.read_calibration(out) is None:
-        raise HTTPException(409, f"{walk_id} is set to the calibrated threshold "
-                                 "but was never measured; re-ingest it")
+    # a different percentile of the same pairs is not a new measurement
+    if changed == {"calib.quantile"}:
+        pipeline.requantile(out, params)
+        first = "select"
     if first == "select":
-        try:
-            return dict(pipeline.reselect(out, params), changed=True)
-        except FileNotFoundError:
-            raise HTTPException(409, "this walk has no cached embeddings; "
-                                     "re-ingest it")
-    # a walk stitched before the pipeline recorded its own inputs cannot be
-    # re-entered partway; say so here rather than as a traceback on the worker
-    if not all((out / f).exists() for f in ("source.json", "pano/panos.json")):
-        raise HTTPException(409, f"{walk_id} was made before stage re-runs; "
-                                 "re-ingest it to change this stage")
+        return dict(pipeline.reselect(out, params), changed=True)
     video = walk_video(walk_id)
     return dict(runner().submit(video, first=first, params=params,
                                 walk_id=walk_id).public(), changed=True)
@@ -310,8 +316,7 @@ def walk_video(walk_id: str) -> Path:
     meta = db.walk_meta(conn(), walk_id) or {}
     video = VIDEO_DIR / Path(meta.get("videoFile") or f"{walk_id}.insv").name
     if not video.exists():
-        raise HTTPException(409, f"the original video for {walk_id} is gone; "
-                                 "re-ingest it to change this stage")
+        raise HTTPException(409, f"the original video for {walk_id} is gone")
     return video
 
 
@@ -348,10 +353,10 @@ def overrides(walk_id: str) -> list[dict]:
 @app.get("/api/walks/{walk_id}/calibration")
 def calibration(walk_id: str) -> dict:
     """How this walk's identical-content reference was measured."""
-    path = walk_dir(walk_id) / "calibration.json"
-    if not path.exists():
-        raise HTTPException(404, "this walk predates calibration; re-ingest it")
-    return json.loads(path.read_text())
+    calib = pipeline.read_calibration(walk_dir(walk_id))
+    if calib is None:
+        raise HTTPException(404, f"no calibration for {walk_id}")
+    return calib
 
 
 @app.get("/api/walks/{walk_id}/calib/{name}")

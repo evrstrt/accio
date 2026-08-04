@@ -17,37 +17,38 @@ def patch(**sections) -> Rerun:
 
 
 def test_a_threshold_change_only_reselects():
-    params, first = merge(PipelineParams(), patch(dedup={"tau": 0.96}))
+    params, first, _ = merge(PipelineParams(), patch(dedup={"tau": 0.96}))
     assert first == "select"
     assert params.dedup.tau == 0.96
 
 
 def test_the_earliest_stage_wins():
-    _, first = merge(PipelineParams(),
-                     patch(dedup={"tau": 0.96}, faces={"fov_deg": 120},
-                           gate={"window": 8}))
+    _, first, changed = merge(PipelineParams(),
+                              patch(dedup={"tau": 0.96}, faces={"fov_deg": 120},
+                                    gate={"window": 8}))
     assert first == "gate"
+    assert changed == {"dedup.tau", "faces.fov_deg", "gate.window"}
 
 
 def test_setting_a_value_back_is_not_a_change():
     p = PipelineParams()
-    params, first = merge(p, patch(gate={"window": p.gate.window},
-                                   dedup={"tau": p.dedup.tau}))
+    params, first, _ = merge(p, patch(gate={"window": p.gate.window},
+                                      dedup={"tau": p.dedup.tau}))
     assert first is None
     assert params == p
 
 
 def test_only_the_edited_fields_move():
     p = PipelineParams()
-    params, first = merge(p, patch(faces={"fov_deg": 120}))
+    params, first, _ = merge(p, patch(faces={"fov_deg": 120}))
     assert first == "faces"
     assert params.faces == replace(p.faces, fov_deg=120)
 
 
 def test_json_lists_become_the_tuples_the_params_use():
-    params, first = merge(PipelineParams(),
-                          patch(faces={"yaws": [0, 120, 240]},
-                                gate={"band": [0.2, 0.8]}))
+    params, first, _ = merge(PipelineParams(),
+                             patch(faces={"yaws": [0, 120, 240]},
+                                   gate={"band": [0.2, 0.8]}))
     assert first == "gate"
     assert params.faces.yaws == (0, 120, 240)
     assert params.gate.band == (0.2, 0.8)
@@ -55,7 +56,7 @@ def test_json_lists_become_the_tuples_the_params_use():
 
 def test_a_band_the_same_as_the_saved_one_is_not_a_change():
     p = PipelineParams()
-    _, first = merge(p, patch(gate={"band": list(p.gate.band)}))
+    _, first, _c = merge(p, patch(gate={"band": list(p.gate.band)}))
     assert first is None
 
 

@@ -40,6 +40,9 @@ export type Stages = {
   panos: number
   sharp: number
   faces: number
+  pairs: number          // identical-frame pairs the calibration measured
+  reference: number      // what those pairs scored, median
+  calibTau: number       // the threshold that resolves to
   anchors: number
   absorbed: number
   dropped: number
@@ -52,6 +55,7 @@ export type PipelineSpec = {
   faces: { fov_deg: number; size: number; yaws: number[] }
   gate: { window: number; band: [number, number] }
   embed: { model_name: string; img_size: number; batch_size: number }
+  calib: { samples: number; quantile: number }
   dedup: { tau: number; rule: string }
   embed_model_used: string
 }
@@ -118,6 +122,7 @@ export type CalibPair = {
 export type Calibration = {
   tau: number
   quantile: number
+  samples: number
   pairs: CalibPair[]
   reference: { median: number; p05: number; min: number; n: number }
   healthy: boolean
@@ -135,14 +140,19 @@ export const fetchJobs = () => req<Job[]>('/api/jobs')
 export type Pending = {
   gate?: { window?: number; band?: [number, number] }
   faces?: { fov_deg?: number; size?: number; yaws?: number[] }
+  calib?: { samples?: number; quantile?: number }
   dedup?: { tau?: number; rule?: 'fixed' | 'calibrated' }
 }
 
 export type Section = keyof Pending
 
+// the stages a machine re-runs, in order; Video is the upload and Review is
+// people. Must match jobs.pipeline.STAGES on the server.
+export const STAGES = ['stitch', 'gate', 'faces', 'embed', 'calibrate', 'select']
+
 // which stage owns each section: editing it re-runs that stage and the rest
 export const STAGE_OF: Record<Section, string> = {
-  gate: 'gate', faces: 'faces', dedup: 'select',
+  gate: 'gate', faces: 'faces', calib: 'calibrate', dedup: 'select',
 }
 
 /** A re-select answers with the new counts; anything heavier answers with the

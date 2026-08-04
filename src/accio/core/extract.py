@@ -159,12 +159,7 @@ def save_panos(pano_dir: Path, frames: list[PanoFrame]) -> None:
 
 def load_panos(pano_dir: Path) -> list[PanoFrame]:
     """The panoramas a previous stitch left behind, in walk order."""
-    index = pano_dir / PANO_INDEX
-    if not index.exists():
-        raise FileNotFoundError(
-            f"{pano_dir.parent.name} was stitched before panoramas recorded "
-            "their timestamps; re-ingest it to change this stage")
-    recorded = json.loads(index.read_text())
+    recorded = json.loads((pano_dir / PANO_INDEX).read_text())
     frames = [PanoFrame(index=r["index"], t_sec=r["tSec"],
                         path=pano_dir / pano_name(r["index"])) for r in recorded]
     missing = [f.path.name for f in frames if not f.path.exists()]

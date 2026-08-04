@@ -60,7 +60,7 @@ def test_run_walk_manifest_and_embeddings_align(tmp_path, monkeypatch):
 
     # the source is reported once, then every stage runs and completes in order
     assert seen == [("video", "done")] + [
-        (s, st) for s in ("stitch", "gate", "faces", "embed", "select")
+        (s, st) for s in ("stitch", "gate", "faces", "embed", "calibrate", "select")
         for st in ("running", "done")]
 
     with open(walk_dir / "manifest.csv", newline="") as f:

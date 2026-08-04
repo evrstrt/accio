@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
-         postRerun, STAGE_OF } from './api'
+         postRerun, STAGES, STAGE_OF } from './api'
 import type { Calibration, Decision, Face, Group, Job, Pending, Section,
               WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
@@ -10,8 +10,6 @@ import Pipeline, { rerunLabel } from './Pipeline'
 
 // cosines this close to tau (0.94) deserve a second look
 const BORDERLINE = 0.955
-
-const ORDER = ['stitch', 'gate', 'faces', 'embed', 'select']
 
 /** Fold one edit into the staged set. A value put back to what the walk
     actually ran is not a change, so it un-stages instead of piling up. */
@@ -329,9 +327,14 @@ export default function App() {
     return () => clearInterval(t)
   }, [active, refreshWalks, reload, selected, walk])
 
+  // the inspector is a fixed panel over the right of the canvas, so the canvas
+  // has to give up the width or the pipeline centres under it
+  const inspecting = view === 'pipeline' && !ingesting && !!inspect && !!walk
+    && !running
+
   const edited = Object.values(pending).reduce(
     (n, sec) => n + Object.keys(sec ?? {}).length, 0)
-  const dirtyFrom = ORDER.find((s) => Object.keys(pending).some(
+  const dirtyFrom = STAGES.find((s) => Object.keys(pending).some(
     (k) => STAGE_OF[k as Section] === s)) ?? null
 
   const onEdit = useCallback((section: Section, key: string, value: unknown) => {
@@ -435,7 +438,8 @@ export default function App() {
           </button>
         ))}
       </nav>
-      <main className={`main${ingesting ? ' center' : ''}`}>
+      <main className={`main${ingesting ? ' center' : ''}${
+        inspecting ? ' inspected' : ''}`}>
         {/* Zed's dotted backdrop, their markup rather than a CSS gradient:
             an 8 px pattern with an r=0.75 circle in blue-300 at 60%. */}
         <svg className="dots">
@@ -498,7 +502,7 @@ export default function App() {
           <div className="empty">No walks yet. Add one with the + above.</div>
         )}
       </main>
-      {view === 'pipeline' && !ingesting && inspect && walk && !running && (
+      {inspecting && (
         <aside className="inspector">
           <div className="inspector-head">
             <span className="inspector-title">{inspect}</span>

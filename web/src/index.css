@@ -24,6 +24,7 @@
   --z-amber: #f99c00;
   --topbar-h: 40px;
   --side-w: 299px;
+  --inspector-w: 420px;
 }
 
 * { box-sizing: border-box; }
@@ -228,6 +229,10 @@ button {
   background: var(--z-surface);
 }
 
+/* the inspector is fixed over the right edge, so the work area yields to it
+   and whatever is centred stays centred in what is actually visible */
+.main.inspected { margin-right: var(--inspector-w); }
+
 /* The ingest card is the whole task, so it sits in the middle of the dotted
    space: padding-top is exactly the topbar, making the content box the
    visible area under it, and the card centers in both axes. */
@@ -296,7 +301,7 @@ button {
   z-index: 20;
   display: flex;
   flex-direction: column;
-  width: 420px;
+  width: var(--inspector-w);
   background: var(--z-bg);
   border-left: 1px solid var(--z-border);
 }
@@ -515,7 +520,11 @@ select.insp-control { cursor: pointer; }
 
 /* --- pipeline canvas ---------------------------------------------------- */
 
-.canvas { position: relative; width: 100%; margin-top: 4px; }
+.canvas { width: 100%; margin-top: 4px; }
+
+/* the graph is a fixed size, so it centres on its own: nothing to measure
+   when the inspector takes 420 px off the right */
+.graph { position: relative; margin: 0 auto; }
 
 /* wires read as a shade darker than panel hairlines, or they vanish */
 .links { position: absolute; inset: 0; pointer-events: none; }
@@ -526,6 +535,9 @@ select.insp-control { cursor: pointer; }
   stroke-opacity: 0.45;
   stroke-width: 1.5;
 }
+
+/* a link that carries a number rather than the frames themselves */
+.links path.aside { stroke-dasharray: 3 3; stroke-opacity: 0.35; }
 
 .links marker path {
   fill: var(--z-icon);
@@ -541,9 +553,9 @@ select.insp-control { cursor: pointer; }
   border: 1px solid var(--z-border);
   border-radius: 4px;
   box-shadow: var(--z-shadow);
-  cursor: grab;
-  user-select: none;
-  touch-action: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
   transition: border-color 0.12s, box-shadow 0.12s;
 }
 
@@ -616,15 +628,6 @@ select.insp-control { cursor: pointer; }
 .pill-apply:hover:not(:disabled) { background: hsl(219, 93%, 40%); }
 .pill-apply:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
 .pill-apply:disabled { opacity: 0.6; cursor: default; }
-
-.node.dragging {
-  cursor: grabbing;
-  z-index: 2;
-  border-color: var(--z-blue-border);
-  box-shadow: var(--z-shadow-pop);
-}
-
-.node > * { pointer-events: none; }
 
 .node-head {
   display: flex;

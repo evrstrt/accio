@@ -82,7 +82,8 @@ def test_rerun_from_faces_reuses_the_stitch(walk):
 
     assert stamps(out / "pano") == before          # the expensive stage stood
     assert seen[:3] == [("video", "done"), ("stitch", "done"), ("gate", "done")]
-    assert [s for s, st in seen if st == "running"] == ["faces", "embed", "select"]
+    assert [s for s, st in seen if st == "running"] == [
+        "faces", "embed", "calibrate", "select"]
 
 
 def test_rerun_from_faces_leaves_no_frames_from_the_old_settings(walk):

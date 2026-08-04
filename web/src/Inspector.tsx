@@ -92,6 +92,7 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
   // what a control shows: the staged edit if there is one, else what ran
   const gate = { ...p.gate, ...pending.gate }
   const faces = { ...p.faces, ...pending.faces }
+  const cal = { ...p.calib, ...pending.calib }
   const dedup = { ...p.dedup, ...pending.dedup }
 
   if (stage === 'video') {
@@ -209,6 +210,53 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
     )
   }
 
+  if (stage === 'calibrate') {
+    const gap = calib ? Math.round(calib.gapSeconds * 1000) : 0
+    return (
+      <>
+        <Group title="component">
+          <Row label="Reference"><Fixed value="next raw frame"
+                                        options={['next raw frame', 'held pose',
+                                                  'repeat walk']} /></Row>
+        </Group>
+        <Group title="settings">
+          <Row label="Panoramas sampled">
+            <Num value={cal.samples} min={2} max={200}
+                 onChange={(v) => onEdit('calib', 'samples', Math.round(v))} />
+          </Row>
+          <Row label="Percentile">
+            <Num value={cal.quantile} step={1} min={0.5} max={50}
+                 onChange={(v) => onEdit('calib', 'quantile', v)} />
+          </Row>
+        </Group>
+        {calib && (
+          <>
+            <Group title="measured">
+              <Row label="Identical scores">
+                <Val>{calib.reference.median} median</Val>
+              </Row>
+              <Row label="Lowest pair"><Val>{calib.reference.min}</Val></Row>
+              <Row label="Pairs"><Val>{calib.reference.n}, {gap} ms apart</Val></Row>
+              <Row label="Calibrated τ"><Val>{calib.tau}</Val></Row>
+              {!calib.healthy && (
+                <div className="insp-warn">Reference is low; this walk may be
+                  mis-stitched or under-exposed.</div>
+              )}
+            </Group>
+            <button className="insp-btn" onClick={onShowCalibration}>
+              How τ was measured
+            </button>
+          </>
+        )}
+        <div className="insp-note">
+          Sampling more panoramas measures again from the video. Moving the
+          percentile only re-reads the pairs already measured, so it is instant.
+        </div>
+        <Out>τ {s.calibTau} from {s.pairs} pairs</Out>
+      </>
+    )
+  }
+
   if (stage === 'embed') {
     return (
       <>
@@ -241,11 +289,7 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
               onChange={(e) => onEdit('dedup', 'rule', e.target.value)}
             >
               <option value="fixed">fixed</option>
-              {/* nothing to take a threshold from on a walk measured before
-                  calibration existed, so the rule would be a no-op */}
-              <option value="calibrated" disabled={!calib}>
-                calibrated{calib ? '' : ' (not measured)'}
-              </option>
+              <option value="calibrated">calibrated</option>
             </select>
           </Row>
         </Group>
@@ -268,21 +312,13 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
           </Row>
           <Row label="Scope"><Fixed value="per walk" options={['per walk', 'across walks']} /></Row>
         </Group>
-        {calib && (
-          <Group title="calibration">
-            <Row label="Identical scores">
-              <Val>{calib.reference.median} median · {calib.reference.n} pairs</Val>
-            </Row>
-            <Row label="Calibrated τ"><Val>{calib.tau}</Val></Row>
-            {!calib.healthy && (
-              <div className="insp-warn">Reference is low; this walk may be
-                mis-stitched or under-exposed.</div>
-            )}
-            <button className="insp-btn" onClick={onShowCalibration}>
-              How τ was measured
-            </button>
-          </Group>
-        )}
+        <div className="insp-note">
+          {dedup.rule === 'calibrated'
+            ? <>The threshold comes from the Calibrate stage, which measured
+                this walk at {s.calibTau}.</>
+            : <>A cosine means nothing on its own. Calibrate measured identical
+                frames on this walk at {s.reference}.</>}
+        </div>
         <Out>{s.absorbed} absorbed, {s.anchors} anchors</Out>
       </>
     )

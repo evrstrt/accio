@@ -25,27 +25,52 @@ import cv2
 import numpy as np
 
 from . import extract, faces as faces_mod
-from .params import PipelineParams
+from .params import CalibParams, PipelineParams
 
-SAMPLE_PANOS = 10        # ~40 pairs at four yaws, enough for a 5th percentile
-QUANTILE = 5.0           # merge what is as alike as 95% of identical pairs
+# guard rails rather than knobs: a threshold outside them is not a measurement
+# of redundancy any more, it is a symptom
 FLOOR, CEILING = 0.85, 0.995
 HEALTHY_REFERENCE = 0.95  # a median below this means the reference is suspect
+MIN_PAIRS = 8             # fewer than this and a percentile means nothing
 CALIB_DIR = "calib"
 
 
-def sample_panos(pano_idx: list[int], n: int = SAMPLE_PANOS) -> list[int]:
+def sample_panos(pano_idx: list[int], n: int) -> list[int]:
     """Evenly spread through the walk, so one static stretch cannot dominate."""
     uniq = sorted(set(pano_idx))
     if len(uniq) <= n:
         return uniq
+    if n < 2:
+        return uniq[:1]
     return [uniq[round(i * (len(uniq) - 1) / (n - 1))] for i in range(n)]
 
 
-def resolve_tau(cosines: np.ndarray) -> float:
-    if len(cosines) < 8:
+def resolve_tau(cosines: np.ndarray, params: CalibParams) -> float:
+    if len(cosines) < MIN_PAIRS:
         return PipelineParams().dedup.tau
-    return round(float(np.clip(np.percentile(cosines, QUANTILE), FLOOR, CEILING)), 4)
+    return round(float(np.clip(np.percentile(cosines, params.quantile),
+                               FLOOR, CEILING)), 4)
+
+
+def record(pairs: list[dict], params: CalibParams, gap_seconds: float) -> dict:
+    """The measurement as the UI shows it: every pair, the threshold it
+    resolves to, and whether the reference itself looks trustworthy."""
+    cos = np.array([p["cosine"] for p in pairs])
+    median = round(float(np.median(cos)), 4) if len(cos) else 0.0
+    return {
+        "tau": resolve_tau(cos, params),
+        "quantile": params.quantile,
+        "samples": params.samples,
+        "pairs": sorted(pairs, key=lambda p: p["cosine"]),
+        "reference": {
+            "median": median,
+            "p05": round(float(np.percentile(cos, 5)), 4) if len(cos) else 0.0,
+            "min": round(float(cos.min()), 4) if len(cos) else 0.0,
+            "n": len(cos),
+        },
+        "healthy": median >= HEALTHY_REFERENCE,
+        "gapSeconds": round(gap_seconds, 4),
+    }
 
 
 def calibrate(video: Path, out: Path, faces: list[tuple[int, float, int, str]],
@@ -63,7 +88,7 @@ def calibrate(video: Path, out: Path, faces: list[tuple[int, float, int, str]],
         t_of[pano] = t_sec
         row_of[(pano, yaw)] = i
 
-    chosen = sample_panos([p for p, _, _, _ in faces])
+    chosen = sample_panos([p for p, _, _, _ in faces], params.calib.samples)
     frame_nos = [round(t_of[p] * native_fps) + 1 for p in chosen]
 
     calib_dir = out / CALIB_DIR
@@ -97,18 +122,4 @@ def calibrate(video: Path, out: Path, faces: list[tuple[int, float, int, str]],
             })
         stitched.unlink()          # the panorama was scratch; the faces are not
 
-    cos = np.array([p["cosine"] for p in pairs])
-    median = round(float(np.median(cos)), 4) if len(cos) else 0.0
-    return {
-        "tau": resolve_tau(cos),
-        "quantile": QUANTILE,
-        "pairs": sorted(pairs, key=lambda p: p["cosine"]),
-        "reference": {
-            "median": median,
-            "p05": round(float(np.percentile(cos, 5)), 4) if len(cos) else 0.0,
-            "min": round(float(cos.min()), 4) if len(cos) else 0.0,
-            "n": len(cos),
-        },
-        "healthy": median >= HEALTHY_REFERENCE,
-        "gapSeconds": round(1.0 / native_fps, 4),
-    }
+    return record(pairs, params.calib, 1.0 / native_fps)

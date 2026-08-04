@@ -22,7 +22,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..core import blur, extract, faces
+from ..core import blur, calibrate as calibrate_mod, extract, faces
 from ..core.calibrate import calibrate
 from ..core.dedup import greedy_dedup
 from ..core.embed import Embedder
@@ -30,7 +30,7 @@ from ..core.params import PipelineParams
 
 EMBED_CHUNK = 64  # faces held in memory at once on the way to the embedder
 MANIFEST_COLUMNS = ["pano_idx", "t_sec", "yaw", "path", "kept", "anchor", "cosine"]
-STAGES = ("stitch", "gate", "faces", "embed", "select")
+STAGES = ("stitch", "gate", "faces", "embed", "calibrate", "select")
 
 # a face on its way through the pipeline: (pano index, t, yaw, file)
 FaceRow = tuple[int, float, int, Path]
@@ -69,8 +69,8 @@ def rerun(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     """Re-run from `first` down, reusing the stages above it as they are.
 
     The stages above are reported done rather than skipped silently, so the
-    canvas shows the same five blocks either way and the ones that were reused
-    are visibly not running.
+    canvas shows the same blocks either way and the ones that were reused are
+    visibly not running.
     """
     say = progress or (lambda *a, **k: None)
     if first not in STAGES:
@@ -111,17 +111,21 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
         with np.load(out / "embeddings.npz") as data:
             embeddings = data["embeddings"]
 
-    say("select", "running")
-    # what "identical" scores on this walk, measured whenever the frames or the
-    # backbone change: the threshold only uses it under the calibrated rule, but
-    # a low reference is a warning worth having either way
     named = [(i, t, yaw, path.name) for i, t, yaw, path in records]
-    if start <= STAGES.index("embed"):
+    # what "identical" scores on this walk. Measured whether or not the
+    # threshold uses it: a low reference means the stitch, the exposure or the
+    # backbone is misbehaving, which is worth knowing either way.
+    if start <= STAGES.index("calibrate"):
+        say("calibrate", "running")
         calib = calibrate(video, out, named, embeddings, params, embedder,
                           native_fps)
-        (out / "calibration.json").write_text(json.dumps(calib, indent=1))
+        save_calibration(out, calib)
+        say("calibrate", "done", pairs=calib["reference"]["n"],
+            reference=calib["reference"]["median"], calibTau=calib["tau"])
     else:
         calib = read_calibration(out)
+
+    say("select", "running")
     params = apply_rule(params, calib)
     result = greedy_dedup(embeddings, params.dedup)
     write_manifest(out / "manifest.csv", named, result)
@@ -198,6 +202,26 @@ def face_rows(out: Path) -> list[FaceRow]:
 def read_calibration(out: Path) -> dict | None:
     path = out / "calibration.json"
     return json.loads(path.read_text()) if path.exists() else None
+
+
+def save_calibration(out: Path, calib: dict) -> None:
+    (out / "calibration.json").write_text(json.dumps(calib, indent=1))
+
+
+def requantile(out: Path, params: PipelineParams) -> dict:
+    """Move the threshold's percentile without measuring anything again.
+
+    The pairs and their cosines are already on disk; the percentile is a
+    statistic over them, not a new measurement. So this costs a sort, and the
+    knob can be explored instead of committed to.
+    """
+    calib = read_calibration(out)
+    if calib is None:
+        raise FileNotFoundError("this walk has no calibration record")
+    calib = calibrate_mod.record(calib["pairs"], params.calib,
+                                 calib.get("gapSeconds", 0.0))
+    save_calibration(out, calib)
+    return calib
 
 
 def apply_rule(params: PipelineParams, calib: dict | None) -> PipelineParams:

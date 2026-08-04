@@ -56,6 +56,20 @@ class EmbedParams:
 
 
 @dataclass(frozen=True)
+class CalibParams:
+    """Measuring what "identical" scores on this walk, to set the threshold by.
+
+    A kept frame and the raw frame straight after it are the same scene, so
+    what they score is the ceiling for "the same thing" with this camera, this
+    stitch and this backbone. The threshold sits at a low percentile of that,
+    so a merge needs two frames about as alike as a pair taken a frame apart.
+    """
+
+    samples: int = 10         # panoramas spread through the walk; x4 faces each
+    quantile: float = 5.0     # merge what is as alike as 95% of identical pairs
+
+
+@dataclass(frozen=True)
 class DedupParams:
     """Greedy cosine dedup, per walk (cross-walk near-duplicates are different
     walls that look alike)."""
@@ -73,6 +87,7 @@ class PipelineParams:
     faces: FaceParams = field(default_factory=FaceParams)
     gate: GateParams = field(default_factory=GateParams)
     embed: EmbedParams = field(default_factory=EmbedParams)
+    calib: CalibParams = field(default_factory=CalibParams)
     dedup: DedupParams = field(default_factory=DedupParams)
 
 
@@ -90,5 +105,6 @@ def from_dict(d: dict) -> PipelineParams:
         faces=FaceParams(**faces),
         gate=GateParams(**gate),
         embed=EmbedParams(**d.get("embed", {})),
+        calib=CalibParams(**d.get("calib", {})),
         dedup=DedupParams(**d.get("dedup", {})),
     )
