@@ -168,9 +168,6 @@ function KeptGrid({ walk, onDecision }: {
 
   return (
     <>
-      <div className="section-title">
-        picks, walk order · arrows move · enter opens · x drops · 1-9 swap pick
-      </div>
       <div className="grid" ref={gridRef}>
         {walk.groups.map((g, i) => {
           const f = pickFace(g)
