@@ -439,7 +439,8 @@ export default function App() {
         ))}
       </nav>
       <main className={`main${ingesting ? ' center' : ''}${
-        inspecting ? ' inspected' : ''}`}>
+        inspecting ? ' inspected' : ''}${
+        view === 'pipeline' && !ingesting ? ' pipeline' : ''}`}>
         {/* Zed's dotted backdrop, their markup rather than a CSS gradient:
             an 8 px pattern with an r=0.75 circle in blue-300 at 60%. */}
         <svg className="dots">

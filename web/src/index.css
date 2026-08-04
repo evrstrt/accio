@@ -25,6 +25,7 @@
   --topbar-h: 40px;
   --side-w: 299px;
   --inspector-w: 420px;
+  --canvas-pad: 12px;
 }
 
 * { box-sizing: border-box; }
@@ -232,6 +233,13 @@ button {
 /* the inspector is fixed over the right edge, so the work area yields to it
    and whatever is centred stays centred in what is actually visible */
 .main.inspected { margin-right: var(--inspector-w); }
+
+/* the pipeline is one object sitting in the dotted field, so it gets the same
+   air above and below. Other views scroll a list and keep the deeper bottom. */
+.main.pipeline {
+  padding-top: calc(var(--topbar-h) + var(--canvas-pad));
+  padding-bottom: var(--canvas-pad);
+}
 
 /* The ingest card is the whole task, so it sits in the middle of the dotted
    space: padding-top is exactly the topbar, making the content box the
@@ -520,7 +528,7 @@ select.insp-control { cursor: pointer; }
 
 /* --- pipeline canvas ---------------------------------------------------- */
 
-.canvas { width: 100%; margin-top: 4px; }
+.canvas { width: 100%; }
 
 /* the graph is a fixed size, so it centres on its own: nothing to measure
    when the inspector takes 420 px off the right */
