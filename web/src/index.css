@@ -535,12 +535,13 @@ select.insp-control { cursor: pointer; }
    when the inspector takes 420 px off the right */
 .graph { position: relative; margin: 0 auto; }
 
-/* wires read as a shade darker than panel hairlines, or they vanish */
+/* wires are grey, not the near-black icon slate: solid so they read cleanly,
+   light enough to stay behind the blocks they connect */
 .links { position: absolute; inset: 0; pointer-events: none; }
 
 .links path {
   fill: none;
-  stroke: var(--z-icon);
+  stroke: var(--z-muted);
   stroke-width: 1.5;
 }
 
@@ -548,7 +549,7 @@ select.insp-control { cursor: pointer; }
 .links path.aside { stroke-dasharray: 3 3; }
 
 .links marker path {
-  fill: var(--z-icon);
+  fill: var(--z-muted);
   stroke: none;
 }
 
