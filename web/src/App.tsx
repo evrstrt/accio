@@ -68,7 +68,7 @@ function GroupRow({ group, onDecision }: {
           onClick={() =>
             onDecision({ anchorIdx: anchor.idx, action: dropped ? 'restore' : 'drop' })}
         >
-          {dropped ? 'restore group' : 'drop group'}
+          {dropped ? 'Restore Group' : 'Drop Group'}
         </button>
       </div>
       <div className="strip">
@@ -90,7 +90,7 @@ function GroupRow({ group, onDecision }: {
                   !isPick && f.cosine !== null && f.cosine < BORDERLINE ? ' borderline' : ''
                 }`}
               >
-                {isPick ? (f.idx === anchor.idx ? 'pick (auto)' : 'pick (override)')
+                {isPick ? (f.idx === anchor.idx ? 'auto pick' : 'override')
                   : f.cosine === null ? `t=${f.tSec.toFixed(1)}s` : f.cosine.toFixed(3)}
               </span>
             </button>
@@ -210,7 +210,7 @@ function JobItem({ job }: { job: Job }) {
       <span className="job-text">
         <span className="job-id">{job.walkId}</span>
         <span className="job-stage">
-          {job.status === 'error' ? 'failed' : job.stage || job.status}
+          {job.status === 'error' ? 'Failed' : job.stage || job.status}
         </span>
       </span>
     </div>
@@ -275,7 +275,7 @@ export default function App() {
         <div className="crumb">
           <span className="crumb-dim">accio</span>
           <span className="sep">/</span>
-          <b>{ingesting ? 'new walk' : selected ?? 'no walk'}</b>
+          <b>{ingesting ? 'New Walk' : selected ?? 'No Walk'}</b>
         </div>
         <div className="top-actions">
           {!ingesting && selected && walk && (
@@ -297,8 +297,8 @@ export default function App() {
           <button
             className={`icon-btn${ingesting ? ' active' : ''}`}
             onClick={() => setIngesting(true)}
-            title="new walk"
-            aria-label="new walk"
+            title="New Walk"
+            aria-label="New Walk"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -349,9 +349,9 @@ export default function App() {
             <KeptGrid walk={walk} onDecision={onDecision} />
           </>
         )}
-        {!error && !ingesting && !walk && selected && <div className="empty">loading…</div>}
+        {!error && !ingesting && !walk && selected && <div className="empty">Loading…</div>}
         {!error && !ingesting && !selected && walks?.length === 0 && (
-          <div className="empty">no walks yet, click “+ new walk”</div>
+          <div className="empty">No walks yet. Add one with the + above.</div>
         )}
       </main>
       </div>

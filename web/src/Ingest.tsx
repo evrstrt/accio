@@ -4,12 +4,12 @@ import type { Job } from './api'
 
 // the item-8 capture metadata: what makes the dataset balanceable later
 const FIELDS = [
-  { name: 'site', label: 'site', placeholder: 'GCMR' },
-  { name: 'building', label: 'building', placeholder: 'tower 2' },
-  { name: 'stage', label: 'stage', placeholder: 'bare-rcc' },
-  { name: 'operator', label: 'operator', placeholder: 'who walked it' },
-  { name: 'mount_height_cm', label: 'mount height (cm)', placeholder: '175', type: 'number' },
-  { name: 'shot_date', label: 'shot date', placeholder: '', type: 'date' },
+  { name: 'site', label: 'Site', placeholder: 'GCMR' },
+  { name: 'building', label: 'Building', placeholder: 'tower 2' },
+  { name: 'stage', label: 'Stage', placeholder: 'bare-rcc' },
+  { name: 'operator', label: 'Operator', placeholder: 'who walked it' },
+  { name: 'mount_height_cm', label: 'Mount Height (cm)', placeholder: '175', type: 'number' },
+  { name: 'shot_date', label: 'Shot Date', placeholder: '', type: 'date' },
 ] as const
 
 export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => void }) {
@@ -23,7 +23,7 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!files.length) {
-      setError('drop an .insv first')
+      setError('Drop an .insv first')
       return
     }
     const form = new FormData(formRef.current!)
@@ -41,7 +41,7 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
 
   return (
     <form ref={formRef} className="ingest" onSubmit={submit}>
-      <div className="section-title">new walk</div>
+      <div className="section-title">New Walk</div>
       <div
         className={`dropzone${dragOver ? ' over' : ''}${files.length ? ' has-file' : ''}`}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
@@ -56,7 +56,7 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
       >
         {files.length
           ? `${files.map((f) => f.name).join(' + ')} (${gb.toFixed(2)} GB)`
-          : 'drop the .insv here (both files for dual-lens walks), or click to browse'}
+          : 'Drop the .insv here (both files for dual-lens walks), or click to browse'}
         <input
           id="ingest-file"
           type="file"
@@ -87,12 +87,12 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
             <div className="upload-fill" style={{ width: `${progress * 100}%` }} />
           </div>
           <span className="upload-pct">
-            {progress < 1 ? `${Math.round(progress * 100)}%` : 'processing…'}
+            {progress < 1 ? `${Math.round(progress * 100)}%` : 'Processing…'}
           </span>
         </div>
       )}
       <button className="go" type="submit" disabled={busy}>
-        {busy ? 'uploading…' : 'accio'}
+        {busy ? 'Uploading…' : 'Accio'}
       </button>
     </form>
   )
