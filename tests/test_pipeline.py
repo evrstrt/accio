@@ -48,12 +48,20 @@ class StubEmbedder:
 
 def test_run_walk_manifest_and_embeddings_align(tmp_path, monkeypatch):
     monkeypatch.setattr(extract, "stitch", fake_stitch)
+    monkeypatch.setattr(extract, "probe_fps_nframes", lambda v: (30.0, 300))
+    monkeypatch.setattr(extract, "lens_files", lambda v: [v])
     embedder = StubEmbedder()
     expected = embedder.rows.copy()
 
+    seen: list[tuple[str, str]] = []
     run_walk(tmp_path / "walk.insv", tmp_path / "out", PARAMS, embedder,
-             progress=lambda *_: None)
+             progress=lambda stage, status, **c: seen.append((stage, status)))
     walk_dir = tmp_path / "out" / "walk"
+
+    # the source is reported once, then every stage runs and completes in order
+    assert seen == [("video", "done")] + [
+        (s, st) for s in ("stitch", "gate", "faces", "embed", "select")
+        for st in ("running", "done")]
 
     with open(walk_dir / "manifest.csv", newline="") as f:
         rows = list(csv.DictReader(f))

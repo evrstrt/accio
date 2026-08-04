@@ -461,7 +461,31 @@ select.insp-control { cursor: pointer; }
 
 .node > * { pointer-events: none; }
 
+.node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .node-title { font-size: 13px; font-weight: 500; line-height: 1.3; color: #000; }
+
+/* a stage still to come is quiet, the one running pulses */
+.node.queued { opacity: 0.55; }
+.node.running { border-color: var(--z-blue-border); }
+.node.error { border-color: var(--z-red); }
+
+.node-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--z-muted);
+  opacity: 0.5;
+}
+
+.node-dot.running { background: var(--z-blue); opacity: 1; animation: pulse 1.2s infinite; }
+.node-dot.error { background: var(--z-red); opacity: 1; }
 
 .node-sub, .node-stat {
   overflow: hidden;
@@ -648,41 +672,21 @@ select.insp-control { cursor: pointer; }
 
 /* --- jobs --------------------------------------------------------------- */
 
-.job-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 12px;
-  font: 11px/1.6 var(--z-mono);
-  letter-spacing: 0;
-  color: var(--z-muted);
-}
-
+/* a walk still running carries a dot where a finished one carries its counts */
 .job-dot {
   flex: none;
   width: 7px;
   height: 7px;
+  margin-right: 2px;
   border-radius: 50%;
   background: var(--z-muted);
+  opacity: 0.5;
 }
 
-.job-item.running .job-dot { background: var(--z-blue); animation: pulse 1.2s infinite; }
-.job-item.error .job-dot { background: var(--z-red); }
+.job-dot.running { background: var(--z-blue); opacity: 1; animation: pulse 1.2s infinite; }
+.job-dot.error { background: var(--z-red); opacity: 1; }
 
 @keyframes pulse { 50% { opacity: 0.3; } }
-
-.job-text { min-width: 0; }
-
-.job-id {
-  display: block;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--z-text);
-}
-
-.job-item.error .job-stage { color: var(--z-red); }
 
 /* --- ingest form -------------------------------------------------------- */
 

@@ -17,18 +17,27 @@ from ..core.params import PipelineParams
 from .pipeline import run_walk
 
 
+STAGES = ("stitch", "gate", "faces", "embed", "select")
+
+
 @dataclass
 class Job:
     id: int
     walkId: str
     status: str = "queued"   # queued | running | done | error
-    stage: str = ""
     error: str = ""
     video: Path = field(default=Path(), repr=False)
+    # per-stage state and the counts each one emitted, so the canvas can show
+    # the run advancing rather than one opaque wait
+    stages: dict[str, str] = field(
+        default_factory=lambda: {s: "queued" for s in STAGES})
+    stats: dict[str, int] = field(default_factory=dict)
 
     def public(self) -> dict:
+        running = next((s for s, st in self.stages.items() if st == "running"), "")
         return {"id": self.id, "walkId": self.walkId, "status": self.status,
-                "stage": self.stage, "error": self.error}
+                "stage": running, "stages": dict(self.stages),
+                "stats": dict(self.stats), "error": self.error}
 
 
 class Runner:
@@ -53,11 +62,19 @@ class Runner:
     def _work(self) -> None:
         while True:
             job = self._q.get()
-            job.status, job.stage = "running", "starting"
+            job.status = "running"
+
+            def progress(stage: str, status: str, **counts) -> None:
+                job.stages[stage] = status
+                job.stats.update(counts)
+
             try:
                 run_walk(job.video, self.out_root, self.params, self.embedder,
-                         progress=lambda msg: setattr(job, "stage", msg))
+                         progress=progress)
                 job.status = "done"
             except Exception:
                 job.status = "error"
                 job.error = traceback.format_exc(limit=2)
+                for stage, state in job.stages.items():
+                    if state == "running":
+                        job.stages[stage] = "error"

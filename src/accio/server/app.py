@@ -12,6 +12,7 @@ accio.db the decisions and walk metadata.
 """
 
 import csv
+import json
 import os
 import shutil
 import threading
@@ -99,6 +100,12 @@ async def ingest(
     # as two uploads; the app owns its copy of the originals.
     if not files or not files[0].filename:
         raise HTTPException(422, "upload the .insv file(s)")
+    # a _10_ on its own is the back lens of a dual-file recording: the SDK
+    # stitches nothing from it, so say so now rather than after the upload
+    names = [Path(f.filename or "").name for f in files]
+    if any("_10_" in n for n in names) and not any("_00_" in n for n in names):
+        raise HTTPException(422, "that is the back lens only; upload the _00_ "
+                                 "file alongside it")
     VIDEO_DIR.mkdir(parents=True, exist_ok=True)
     saved = []
     for up in files:
@@ -155,10 +162,15 @@ def walk_detail(walk_id: str) -> dict:
 def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
     """What each stage emitted, for the pipeline view. The pre-gate pano count
     comes from the stitched files on disk; everything else from the manifest."""
-    pano_dir = walk_dir(walk_id) / "pano"
+    wdir = walk_dir(walk_id)
+    pano_dir = wdir / "pano"
+    src_file = wdir / "source.json"
+    src = json.loads(src_file.read_text()) if src_file.exists() else {}
     anchors = sum(1 for r in rows if r["kept"] == "1")
     dropped = sum(1 for s in state.values() if s["dropped"])
     return {
+        "frames": src.get("frames", 0),
+        "seconds": src.get("seconds", 0),
         "panos": len(list(pano_dir.glob(f"{extract.PANO_PREFIX}*{extract.PANO_EXT}"))),
         "sharp": len({r["pano_idx"] for r in rows}),
         "faces": len(rows),

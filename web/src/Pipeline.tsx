@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { WalkDetail } from './api'
+import type { Job, StageState, WalkDetail } from './api'
 
 // The pipeline as blocks on the canvas: each one says what it emitted, so the
-// funnel reads spatially instead of as a single line. Read-only for now, the
-// chain is fixed; blocks move, nothing rewires.
+// funnel reads spatially instead of as a single line. A walk that is still
+// running has no manifest yet, so the blocks read from the job instead and
+// fill in as each stage lands. The chain is fixed; blocks move, nothing
+// rewires.
 
 const W = 232, H = 76, GAP_Y = 36
 const SNAP = 8   // the dot pitch, so blocks land on the grid
@@ -15,6 +17,17 @@ type Block = {
   title: string
   sub: (w: WalkDetail) => string
   stat: (w: WalkDetail) => string
+  // shown while the run is in flight, from whatever the job has reported
+  live?: (stats: Record<string, number>) => string
+  idle: string          // the sub line before the walk's own settings exist
+}
+
+/** "4320 frames · 2:24", the denominator the rest of the funnel cuts down */
+function footage(frames?: number, seconds?: number): string {
+  if (!frames) return 'uploaded'
+  const s = Math.round(seconds ?? 0)
+  const clock = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+  return `${frames.toLocaleString()} frames · ${clock}`
 }
 
 /** "vit_base_patch16_dinov3.lvd1689m" -> "DINOv3 ViT-B/16" */
@@ -31,45 +44,79 @@ const BLOCKS: Block[] = [
     title: 'Video',
     sub: (w) => [w.meta?.site, w.meta?.building].filter(Boolean).join(' · ')
       || 'dual-fisheye .insv',
-    stat: (w) => w.meta?.shotDate || 'no date',
+    stat: (w) => footage(w.stages.frames, w.stages.seconds),
+    live: (c) => footage(c.frames, c.seconds),
+    idle: 'dual-fisheye .insv',
   },
   {
     id: 'stitch',
     title: 'Stitch',
     sub: (w) => `MediaSDK optflow · ${w.pipeline.extract.fps}fps`,
     stat: (w) => `${w.stages.panos} panos`,
+    live: (c) => (c.panos ? `${c.panos} panos` : ''),
+    // the sample rate is the interesting part: 4320 frames in, 144 out
+    idle: 'MediaSDK optflow',
   },
   {
     id: 'gate',
     title: 'Gate',
     sub: (w) => `sharpest per ${w.pipeline.gate.window}`,
     stat: (w) => `${w.stages.sharp} sharp`,
+    live: (c) => (c.sharp ? `${c.sharp} sharp` : ''),
+    idle: 'sharpest per window',
   },
   {
     id: 'faces',
     title: 'Faces',
     sub: (w) => `gnomonic · ${w.pipeline.faces.yaws.length} × ${w.pipeline.faces.fov_deg}°`,
     stat: (w) => `${w.stages.faces} faces`,
+    live: (c) => (c.faces ? `${c.faces} faces` : ''),
+    idle: 'gnomonic',
   },
   {
     id: 'embed',
     title: 'Embed',
     sub: (w) => modelLabel(w.pipeline.embed_model_used || w.pipeline.embed.model_name),
     stat: (w) => `${w.stages.faces} vectors`,
+    live: (c) => (c.faces ? `${c.faces} vectors` : ''),
+    idle: 'DINOv3 ViT-B/16',
   },
   {
     id: 'select',
     title: 'Select',
     sub: (w) => `greedy cosine · τ ${w.pipeline.dedup.tau}`,
     stat: (w) => `${w.stages.absorbed} absorbed`,
+    live: (c) => (c.absorbed != null ? `${c.absorbed} absorbed` : ''),
+    idle: 'greedy cosine',
   },
   {
     id: 'review',
     title: 'Review',
     sub: (w) => (w.stages.dropped ? `${w.stages.dropped} dropped` : 'no overrides'),
     stat: (w) => `${w.stages.kept} kept`,
+    idle: 'human overrides',
   },
 ]
+
+/** What each block shows and how it looks, from a finished walk or a live job.
+    Video and Review bracket the machine stages: Video is done as soon as the
+    upload is in, Review only becomes available once the run finishes. */
+function stageView(b: Block, walk: WalkDetail | null, job: Job | null) {
+  // A run in flight wins over the manifest: re-running an existing walk must
+  // show this run's progress, not the counts the last one left behind.
+  const live = job !== null && job.status !== 'done'
+  const state: StageState =
+    b.id === 'video' ? 'done'
+      : b.id === 'review' ? (live || !walk ? 'queued' : 'done')
+      : live ? job.stages[b.id] ?? 'queued'
+      : walk ? 'done' : 'queued'
+  const done = state === 'done'
+  return {
+    state,
+    sub: walk ? b.sub(walk) : b.idle,
+    stat: done && walk ? b.stat(walk) : (job && b.live?.(job.stats)) || '',
+  }
+}
 
 const LAYOUT_KEY = 'accio.pipeline.layout'
 
@@ -107,8 +154,9 @@ function link(a: Pos, b: Pos): string {
   return `M${x1},${y1} C${x1 + off},${y1} ${x2 - off},${y2} ${x2},${y2}`
 }
 
-export default function Pipeline({ walk, selected, onSelect }: {
-  walk: WalkDetail
+export default function Pipeline({ walk, job, selected, onSelect }: {
+  walk: WalkDetail | null
+  job: Job | null
   selected: string | null
   onSelect: (id: string | null) => void
 }) {
@@ -191,23 +239,29 @@ export default function Pipeline({ walk, selected, onSelect }: {
                 d={link(layout[b.id], layout[BLOCKS[i + 1].id])} />
         ))}
       </svg>
-      {BLOCKS.map((b) => (
-        <div
-          key={b.id}
-          className={`node${selected === b.id ? ' selected' : ''}${
-            dragging === b.id ? ' dragging' : ''}`}
-          style={{ left: layout[b.id].x, top: layout[b.id].y }}
-          onPointerDown={(e) => onPointerDown(e, b.id)}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-          onClick={() => onClick(b)}
-        >
-          <div className="node-title">{b.title}</div>
-          <div className="node-sub">{b.sub(walk)}</div>
-          <div className="node-stat">{b.stat(walk)}</div>
-        </div>
-      ))}
+      {BLOCKS.map((b) => {
+        const v = stageView(b, walk, job)
+        return (
+          <div
+            key={b.id}
+            className={`node ${v.state}${selected === b.id ? ' selected' : ''}${
+              dragging === b.id ? ' dragging' : ''}`}
+            style={{ left: layout[b.id].x, top: layout[b.id].y }}
+            onPointerDown={(e) => onPointerDown(e, b.id)}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
+            onClick={() => onClick(b)}
+          >
+            <div className="node-head">
+              <span className="node-title">{b.title}</span>
+              {v.state !== 'done' && <span className={`node-dot ${v.state}`} />}
+            </div>
+            <div className="node-sub">{v.sub}</div>
+            <div className="node-stat">{v.stat || '\u00a0'}</div>
+          </div>
+        )
+      })}
     </div>
   )
 }

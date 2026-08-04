@@ -7,6 +7,7 @@ row. The ingest job calls this; there is no other entry point.
 """
 
 import csv
+import json
 from itertools import batched
 from pathlib import Path
 
@@ -26,18 +27,33 @@ def face_name(pano_idx: int, yaw: int) -> str:
 
 
 def run_walk(video: Path, out_root: Path, params: PipelineParams,
-             embedder: Embedder, progress=print) -> dict:
+             embedder: Embedder, progress=None) -> dict:
+    """progress(stage, status, **counts) is called around every stage, so the
+    caller can show the run advancing instead of a single opaque wait."""
+    say = progress or (lambda *a, **k: None)
     walk = video.stem
     out = out_root / walk
-    progress(f"stitching at {params.extract.fps:g} fps")
-    panos = extract.stitch(video, out / "pano", params.extract)
+    out.mkdir(parents=True, exist_ok=True)
 
-    progress(f"blur-gating {len(panos)} panos")
+    # what the camera actually recorded, kept next to the derived frames: it is
+    # the denominator the rest of the funnel is a fraction of
+    native_fps, frames = extract.probe_fps_nframes(video)
+    (out / "source.json").write_text(json.dumps(
+        {"frames": frames, "fps": native_fps, "seconds": round(frames / native_fps, 1),
+         "files": [p.name for p in extract.lens_files(video)]}))
+    say("video", "done", frames=frames, seconds=round(frames / native_fps))
+
+    say("stitch", "running")
+    panos = extract.stitch(video, out / "pano", params.extract)
+    say("stitch", "done", panos=len(panos))
+
+    say("gate", "running")
     scores = [blur.score_pano(cv2.imread(str(p.path)), params.gate) for p in panos]
     sharp = [p for p, keep in zip(panos, blur.windowed_keep(scores, params.gate.window))
              if keep]
+    say("gate", "done", sharp=len(sharp))
 
-    progress(f"rendering {len(sharp)} x {len(params.faces.yaws)} faces")
+    say("faces", "running")
     faces_dir = out / "faces"
     faces_dir.mkdir(parents=True, exist_ok=True)
     records = []  # (pano, yaw, path) in capture order
@@ -47,8 +63,9 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
             path = faces_dir / face_name(p.index, yaw)
             cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
             records.append((p, yaw, path))
+    say("faces", "done", faces=len(records))
 
-    progress(f"embedding {len(records)} faces")
+    say("embed", "running")
     embeddings = np.concatenate([
         embedder.embed([cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
                         for _, _, path in chunk])
@@ -59,6 +76,9 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
     # walks embedded by the same model, so the model name travels with the rows.
     np.savez(out / "embeddings.npz",
              embeddings=embeddings, model=params.embed.model_name)
+    say("embed", "done")
+
+    say("select", "running")
     result = greedy_dedup(embeddings, params.dedup)
 
     kept = set(result.kept)
@@ -72,8 +92,7 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
                 anchor, cos = str(a), f"{c:.4f}"
             w.writerow([p.index, f"{p.t_sec:.1f}", yaw, path.name,
                         int(i in kept), anchor, cos])
+    say("select", "done", anchors=len(kept), absorbed=len(records) - len(kept))
 
-    progress(f"{len(panos)} panos -> {len(sharp)} sharp -> "
-             f"{len(records)} faces -> {len(kept)} kept")
     return dict(walk=walk, panos=len(panos), sharp=len(sharp),
                 faces=len(records), kept=len(kept))

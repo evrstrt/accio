@@ -205,17 +205,22 @@ function KeptGrid({ walk, onDecision }: {
   )
 }
 
-function JobItem({ job }: { job: Job }) {
+/** Same row as a finished walk: the name, then a dot instead of the counts. */
+function JobItem({ job, active, onClick }: {
+  job: Job
+  active: boolean
+  onClick: () => void
+}) {
   return (
-    <div className={`job-item ${job.status}`}>
-      <span className="job-dot" />
-      <span className="job-text">
-        <span className="job-id">{job.walkId}</span>
-        <span className="job-stage">
-          {job.status === 'error' ? 'Failed' : job.stage || job.status}
-        </span>
-      </span>
-    </div>
+    <button
+      className={`walk-item${active ? ' active' : ''}`}
+      onClick={onClick}
+      title={job.status === 'error' ? `Failed: ${job.error.split('\n').pop()}`
+        : job.stage || job.status}
+    >
+      <span className="walk-id">{job.walkId}</span>
+      <span className={`job-dot ${job.status}`} />
+    </button>
   )
 }
 
@@ -231,12 +236,17 @@ export default function App() {
 
   const exportUrl = selected
     ? `/api/walks/${encodeURIComponent(selected)}/export` : ''
+  const job = jobs.find((j) => j.walkId === selected) ?? null
+  const running = job !== null && job.status !== 'done'
 
   const refreshWalks = useCallback(
     () => fetchWalks().then(setWalks).catch((e) => setError(String(e))),
     [])
 
   useEffect(() => {
+    // jobs too: a run started in another tab (or before a reload) should still
+    // show up in the rail and keep its canvas live
+    fetchJobs().then(setJobs).catch(() => {})
     fetchWalks()
       .then((ws) => {
         setWalks(ws)
@@ -250,22 +260,29 @@ export default function App() {
     setWalk(null)
     setView('pipeline')
     setInspect(null)
-    fetchWalk(selected).then(setWalk).catch((e) => setError(String(e)))
+    // a queued or running walk has no manifest yet: the canvas runs off the
+    // job until it lands, so a 404 here is expected rather than an error
+    fetchWalk(selected).then(setWalk).catch(() => setWalk(null))
   }, [selected])
 
-  // poll jobs while any are queued or running
+  // Poll jobs always, fast while something is in flight and slowly otherwise:
+  // a run can start in another tab, and stopping entirely means the rail never
+  // notices it.
   const active = jobs.some((j) => j.status === 'queued' || j.status === 'running')
   useEffect(() => {
-    if (!active) return
     const t = setInterval(() => {
       fetchJobs().then((js) => {
         setJobs(js)
+        const mine = js.find((j) => j.walkId === selected)
+        if (mine?.status === 'done' && !walk && selected) {
+          fetchWalk(selected).then(setWalk).catch(() => {})
+        }
         const stillActive = js.some((j) => j.status === 'queued' || j.status === 'running')
         if (!stillActive) refreshWalks()
       }).catch(() => {})
-    }, 2000)
+    }, active ? 2000 : 8000)
     return () => clearInterval(t)
-  }, [active, refreshWalks])
+  }, [active, refreshWalks, selected, walk])
 
   const onDecision = useCallback((d: Decision) => {
     if (!selected) return
@@ -297,7 +314,7 @@ export default function App() {
           )}
         </div>
         <div className="top-actions">
-          {!ingesting && selected && walk && (
+          {!ingesting && selected && walk && !running && (
             <>
               <button
                 className={`top-btn${view === 'review' ? ' active' : ''}`}
@@ -327,7 +344,10 @@ export default function App() {
             </svg>
           </button>
         </div>
-        {jobs.filter((j) => j.status !== 'done').map((j) => <JobItem key={j.id} job={j} />)}
+        {jobs.filter((j) => j.status !== 'done').map((j) => (
+          <JobItem key={j.id} job={j} active={j.walkId === selected}
+                   onClick={() => { setIngesting(false); setSelected(j.walkId) }} />
+        ))}
         {walks?.map((w) => (
           <button
             key={w.id}
@@ -358,11 +378,12 @@ export default function App() {
             onSubmitted={(job) => {
               setJobs((js) => [job, ...js])
               setIngesting(false)
+              setSelected(job.walkId)   // watch it run on its own canvas
             }}
           />
         )}
-        {!error && !ingesting && walk && view === 'pipeline' && (
-          <Pipeline walk={walk} selected={inspect} onSelect={setInspect} />
+        {!error && !ingesting && (walk || running) && view === 'pipeline' && (
+          <Pipeline walk={walk} job={job} selected={inspect} onSelect={setInspect} />
         )}
         {!error && !ingesting && walk && view === 'review' && (
           <>
@@ -373,12 +394,14 @@ export default function App() {
             <KeptGrid walk={walk} onDecision={onDecision} />
           </>
         )}
-        {!error && !ingesting && !walk && selected && <div className="empty">Loading…</div>}
+        {!error && !ingesting && !walk && !running && selected && (
+          <div className="empty">Loading…</div>
+        )}
         {!error && !ingesting && !selected && walks?.length === 0 && (
           <div className="empty">No walks yet. Add one with the + above.</div>
         )}
       </main>
-      {view === 'pipeline' && !ingesting && inspect && walk && (
+      {view === 'pipeline' && !ingesting && inspect && walk && !running && (
         <aside className="inspector">
           <div className="inspector-head">
             <span className="inspector-title">{inspect}</span>

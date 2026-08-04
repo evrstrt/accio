@@ -35,6 +35,8 @@ export type WalkSummary = {
 }
 
 export type Stages = {
+  frames: number
+  seconds: number
   panos: number
   sharp: number
   faces: number
@@ -63,11 +65,15 @@ export type WalkDetail = {
   pipeline: PipelineSpec
 }
 
+export type StageState = 'queued' | 'running' | 'done' | 'error'
+
 export type Job = {
   id: number
   walkId: string
-  status: 'queued' | 'running' | 'done' | 'error'
-  stage: string
+  status: StageState
+  stage: string                            // the stage running right now
+  stages: Record<string, StageState>
+  stats: Record<string, number>            // counts each stage emitted
   error: string
 }
 
