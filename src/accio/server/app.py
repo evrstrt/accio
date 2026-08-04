@@ -15,6 +15,7 @@ import csv
 import os
 import shutil
 import threading
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -146,7 +147,34 @@ def walk_detail(walk_id: str) -> dict:
             "dropped": s["dropped"],
         })
     return {"id": walk_id, "faces": len(faces), "groups": groups,
-            "meta": db.walk_meta(conn(), walk_id)}
+            "meta": db.walk_meta(conn(), walk_id),
+            "stages": stage_counts(walk_id, rows, state),
+            "pipeline": pipeline_spec(walk_id)}
+
+
+def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
+    """What each stage emitted, for the pipeline view. The pre-gate pano count
+    comes from the stitched files on disk; everything else from the manifest."""
+    pano_dir = walk_dir(walk_id) / "pano"
+    anchors = sum(1 for r in rows if r["kept"] == "1")
+    dropped = sum(1 for s in state.values() if s["dropped"])
+    return {
+        "panos": len(list(pano_dir.glob(f"{extract.PANO_PREFIX}*{extract.PANO_EXT}"))),
+        "sharp": len({r["pano_idx"] for r in rows}),
+        "faces": len(rows),
+        "anchors": anchors,
+        "absorbed": len(rows) - anchors,
+        "dropped": dropped,
+        "kept": anchors - dropped,
+    }
+
+
+def pipeline_spec(walk_id: str) -> dict:
+    """The stage settings this walk was built with, plus the embedder that
+    actually ran (the npz records it, so a model swap stays visible)."""
+    npz = walk_dir(walk_id) / "embeddings.npz"
+    model = str(np.load(npz)["model"]) if npz.exists() else ""
+    return dict(asdict(PipelineParams()), embed_model_used=model)
 
 
 class Decision(BaseModel):

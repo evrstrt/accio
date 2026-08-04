@@ -34,11 +34,33 @@ export type WalkSummary = {
   meta: WalkMeta
 }
 
+export type Stages = {
+  panos: number
+  sharp: number
+  faces: number
+  anchors: number
+  absorbed: number
+  dropped: number
+  kept: number
+}
+
+// the stage settings a walk was built with, as the server reports them
+export type PipelineSpec = {
+  extract: { fps: number; pano_width: number; sdk_image: string }
+  faces: { fov_deg: number; size: number; yaws: number[] }
+  gate: { window: number; band: [number, number] }
+  embed: { model_name: string; img_size: number; batch_size: number }
+  dedup: { tau: number }
+  embed_model_used: string
+}
+
 export type WalkDetail = {
   id: string
   faces: number
   groups: Group[]
   meta: WalkMeta
+  stages: Stages
+  pipeline: PipelineSpec
 }
 
 export type Job = {

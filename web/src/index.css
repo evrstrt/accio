@@ -119,6 +119,17 @@ button {
 .crumb .sep, .crumb-dim { opacity: 0.6; }
 .crumb b { color: #000; font-weight: 400; }
 
+.crumb-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--z-text);
+  opacity: 0.6;
+  transition: opacity 0.12s;
+}
+
+.crumb-link:hover { opacity: 1; }
+
 .top-actions { display: flex; align-items: center; gap: 2px; }
 
 .z-divider {
@@ -274,6 +285,66 @@ button {
   font-weight: 500;
   color: #000;
 }
+
+/* --- pipeline canvas ---------------------------------------------------- */
+
+.canvas { position: relative; width: 100%; margin-top: 4px; }
+
+/* wires read as a shade darker than panel hairlines, or they vanish */
+.links { position: absolute; inset: 0; pointer-events: none; }
+
+.links path {
+  fill: none;
+  stroke: var(--z-icon);
+  stroke-opacity: 0.45;
+  stroke-width: 1.5;
+}
+
+.links marker path {
+  fill: var(--z-icon);
+  fill-opacity: 0.45;
+  stroke: none;
+}
+
+.node {
+  position: absolute;
+  width: 232px;
+  padding: 8px 10px 9px;
+  background: var(--z-bg);
+  border: 1px solid var(--z-border);
+  border-radius: 4px;
+  box-shadow: var(--z-shadow);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.node.opens { cursor: pointer; }
+.node:hover { border-color: var(--z-blue-border); }
+
+.node.dragging {
+  cursor: grabbing;
+  z-index: 2;
+  border-color: var(--z-blue-border);
+  box-shadow: var(--z-shadow-pop);
+}
+
+.node > * { pointer-events: none; }
+
+.node-title { font-size: 13px; font-weight: 500; line-height: 1.3; color: #000; }
+
+.node-sub, .node-stat {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.node-sub { color: var(--z-muted); }
+.node-stat { color: var(--z-text); }
 
 /* --- tiles -------------------------------------------------------------- */
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchJobs, fetchWalk, fetchWalks, postDecision } from './api'
 import type { Decision, Face, Group, Job, WalkDetail, WalkSummary } from './api'
 import Ingest from './Ingest'
+import Pipeline from './Pipeline'
 
 // cosines this close to tau (0.94) deserve a second look
 const BORDERLINE = 0.955
@@ -223,7 +224,11 @@ export default function App() {
   const [walk, setWalk] = useState<WalkDetail | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [ingesting, setIngesting] = useState(false)
+  const [view, setView] = useState<'pipeline' | 'review'>('pipeline')
   const [error, setError] = useState<string | null>(null)
+
+  const exportUrl = selected
+    ? `/api/walks/${encodeURIComponent(selected)}/export` : ''
 
   const refreshWalks = useCallback(
     () => fetchWalks().then(setWalks).catch((e) => setError(String(e))),
@@ -241,6 +246,7 @@ export default function App() {
   useEffect(() => {
     if (!selected) return
     setWalk(null)
+    setView('pipeline')
     fetchWalk(selected).then(setWalk).catch((e) => setError(String(e)))
   }, [selected])
 
@@ -275,17 +281,21 @@ export default function App() {
         <div className="crumb">
           <span className="crumb-dim">accio</span>
           <span className="sep">/</span>
-          <b>{ingesting ? 'New Walk' : selected ?? 'No Walk'}</b>
+          {view === 'review' && !ingesting ? (
+            <>
+              <button className="crumb-link" onClick={() => setView('pipeline')}>
+                {selected}
+              </button>
+              <span className="sep">/</span>
+              <b>Review</b>
+            </>
+          ) : (
+            <b>{ingesting ? 'New Walk' : selected ?? 'No Walk'}</b>
+          )}
         </div>
         <div className="top-actions">
           {!ingesting && selected && walk && (
-            <a
-              className="top-btn"
-              href={`/api/walks/${encodeURIComponent(selected)}/export`}
-              download
-            >
-              Export
-            </a>
+            <a className="top-btn" href={exportUrl} download>Export</a>
           )}
         </div>
       </header>
@@ -340,7 +350,16 @@ export default function App() {
             }}
           />
         )}
-        {!error && !ingesting && walk && (
+        {!error && !ingesting && walk && view === 'pipeline' && (
+          <Pipeline
+            walk={walk}
+            onOpen={(what) => {
+              if (what === 'review') setView('review')
+              else window.location.assign(exportUrl)
+            }}
+          />
+        )}
+        {!error && !ingesting && walk && view === 'review' && (
           <>
             <header className="walk-header">
               <MetaLine walk={walk} />
