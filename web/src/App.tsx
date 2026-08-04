@@ -320,7 +320,7 @@ export default function App() {
           </button>
         ))}
       </nav>
-      <main className="main">
+      <main className={`main${ingesting ? ' center' : ''}`}>
         {/* Zed's dotted backdrop, their markup rather than a CSS gradient:
             an 8 px pattern with an r=0.75 circle in blue-300 at 60%. */}
         <svg className="dots">

@@ -217,6 +217,16 @@ button {
   background: var(--z-surface);
 }
 
+/* The ingest card is the whole task, so it sits in the middle of the dotted
+   space: padding-top is exactly the topbar, making the content box the
+   visible area under it, and the card centers in both axes. */
+.main.center {
+  display: grid;
+  place-items: center;
+  height: 100vh;
+  padding: var(--topbar-h) 16px 0;
+}
+
 .dots {
   position: absolute;
   inset: 0;
