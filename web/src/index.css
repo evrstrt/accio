@@ -25,7 +25,8 @@
   --topbar-h: 40px;
   --side-w: 299px;
   --inspector-w: 420px;
-  --canvas-pad: 12px;
+  --canvas-pad: 24px;
+  --node-h: 76px;
 }
 
 * { box-sizing: border-box; }
@@ -540,22 +541,23 @@ select.insp-control { cursor: pointer; }
 .links path {
   fill: none;
   stroke: var(--z-icon);
-  stroke-opacity: 0.45;
   stroke-width: 1.5;
 }
 
 /* a link that carries a number rather than the frames themselves */
-.links path.aside { stroke-dasharray: 3 3; stroke-opacity: 0.35; }
+.links path.aside { stroke-dasharray: 3 3; }
 
 .links marker path {
   fill: var(--z-icon);
-  fill-opacity: 0.45;
   stroke: none;
 }
 
+/* the size is the contract the links are drawn against: W and H in
+   Pipeline.tsx must match, or every arrow starts short of its block */
 .node {
   position: absolute;
   width: 232px;
+  height: var(--node-h);
   padding: 8px 10px 9px;
   background: var(--z-bg);
   border: 1px solid var(--z-border);
