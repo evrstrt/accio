@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchJobs, fetchWalk, fetchWalks, postDecision } from './api'
 import type { Decision, Face, Group, Job, WalkDetail, WalkSummary } from './api'
 import Ingest from './Ingest'
+import Inspector from './Inspector'
 import Pipeline from './Pipeline'
 
 // cosines this close to tau (0.94) deserve a second look
@@ -377,7 +378,7 @@ export default function App() {
           <div className="empty">No walks yet. Add one with the + above.</div>
         )}
       </main>
-      {view === 'pipeline' && !ingesting && inspect && (
+      {view === 'pipeline' && !ingesting && inspect && walk && (
         <aside className="inspector">
           <div className="inspector-head">
             <span className="inspector-title">{inspect}</span>
@@ -392,6 +393,9 @@ export default function App() {
                 <path d="M18 6 6 18M6 6l12 12" />
               </svg>
             </button>
+          </div>
+          <div className="insp-body">
+            <Inspector stage={inspect} walk={walk} onOpenReview={() => setView('review')} />
           </div>
         </aside>
       )}

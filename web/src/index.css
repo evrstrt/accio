@@ -317,6 +317,100 @@ button {
   user-select: none;
 }
 
+.insp-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.insp-group { display: flex; flex-direction: column; gap: 2px; }
+
+.insp-group-title {
+  margin-bottom: 4px;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+}
+
+/* label left, control right: Zed's option row */
+.insp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+}
+
+.insp-label { font-size: 13px; }
+
+.insp-control {
+  width: 200px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--z-border);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--z-text);
+  font: 13px/1 var(--z-sans);
+  letter-spacing: -0.35px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+
+.insp-control:focus { border-color: var(--z-blue-border); }
+.insp-control.num { width: 96px; }
+select.insp-control { cursor: pointer; }
+
+.insp-toggle { width: 14px; height: 14px; margin: 0; accent-color: var(--z-blue); }
+
+.insp-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.insp-note { font-size: 12px; line-height: 1.5; color: var(--z-muted); }
+
+/* what the stage emitted, in the same mono as the block's stat line */
+.insp-out {
+  margin-top: auto;
+  padding: 8px;
+  border: 1px solid var(--z-border);
+  border-radius: 4px;
+  background: var(--z-surface);
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Zed's secondary button, full width in the panel */
+.insp-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  border: 1px solid rgba(199, 203, 210, 0.5);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: rgba(111, 123, 144, 0.1) 0 -2px 0 0 inset;
+  color: #000;
+  font: 14px/1 var(--z-sans);
+  letter-spacing: -0.35px;
+  transition: background-color 0.12s, transform 0.05s;
+}
+
+.insp-btn:hover { background: #fff; }
+.insp-btn:active { transform: translateY(1px) scale(0.99); box-shadow: none; }
+
 /* --- pipeline canvas ---------------------------------------------------- */
 
 .canvas { position: relative; width: 100%; margin-top: 4px; }
