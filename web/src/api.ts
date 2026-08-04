@@ -100,6 +100,18 @@ export const postDecision = (walkId: string, d: Decision) =>
   })
 export const fetchJobs = () => req<Job[]>('/api/jobs')
 
+// staged settings, applied to an existing walk (Select re-runs from the
+// cached embeddings, so this returns in seconds)
+export type Pending = { tau?: number }
+
+export const postRerun = (walkId: string, p: Pending) =>
+  req<{ faces: number; anchors: number; absorbed: number }>(
+    `/api/walks/${encodeURIComponent(walkId)}/rerun`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(p),
+    })
+
 // XHR instead of fetch: multi-GB .insv uploads need progress events
 export const postIngest = (form: FormData, onProgress?: (frac: number) => void) =>
   new Promise<Job>((resolve, reject) => {

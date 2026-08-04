@@ -120,6 +120,18 @@ function stageView(b: Block, walk: WalkDetail | null, job: Job | null) {
 
 const LAYOUT_KEY = 'accio.pipeline.layout'
 
+// the stages a machine re-runs; Video is the upload and Review is people
+const MACHINE = ['stitch', 'gate', 'faces', 'embed', 'select']
+
+/** "Faces, Embed, Select": what editing this stage will actually re-run. */
+export function rerunLabel(from: string): string {
+  const i = MACHINE.indexOf(from)
+  if (i < 0) return ''
+  return MACHINE.slice(i)
+    .map((id) => BLOCKS.find((b) => b.id === id)?.title ?? id)
+    .join(', ')
+}
+
 /** One column, top to bottom: the walk enters at the top and falls through
     the stages, so reading down the canvas is reading the funnel. Centred by
     x, not by centring the canvas itself, so dragging a block never shifts
@@ -154,12 +166,15 @@ function link(a: Pos, b: Pos): string {
   return `M${x1},${y1} C${x1 + off},${y1} ${x2 - off},${y2} ${x2},${y2}`
 }
 
-export default function Pipeline({ walk, job, selected, onSelect }: {
+export default function Pipeline({ walk, job, selected, dirtyFrom, onSelect }: {
   walk: WalkDetail | null
   job: Job | null
   selected: string | null
+  dirtyFrom: string | null
   onSelect: (id: string | null) => void
 }) {
+  // a staged edit dirties its own stage and everything downstream of it
+  const dirtyAt = dirtyFrom ? BLOCKS.findIndex((b) => b.id === dirtyFrom) : -1
   const [layout, setLayout] = useState<Record<string, Pos> | null>(savedLayout)
   const [dragging, setDragging] = useState<string | null>(null)
   const canvas = useRef<HTMLDivElement>(null)
@@ -239,12 +254,14 @@ export default function Pipeline({ walk, job, selected, onSelect }: {
                 d={link(layout[b.id], layout[BLOCKS[i + 1].id])} />
         ))}
       </svg>
-      {BLOCKS.map((b) => {
+      {BLOCKS.map((b, i) => {
         const v = stageView(b, walk, job)
+        const dirty = dirtyAt >= 0 && i >= dirtyAt
         return (
           <div
             key={b.id}
-            className={`node ${v.state}${selected === b.id ? ' selected' : ''}${
+            className={`node ${v.state}${dirty ? ' dirty' : ''}${
+              selected === b.id ? ' selected' : ''}${
               dragging === b.id ? ' dragging' : ''}`}
             style={{ left: layout[b.id].x, top: layout[b.id].y }}
             onPointerDown={(e) => onPointerDown(e, b.id)}

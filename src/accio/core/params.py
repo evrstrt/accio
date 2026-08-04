@@ -71,3 +71,21 @@ class PipelineParams:
     gate: GateParams = field(default_factory=GateParams)
     embed: EmbedParams = field(default_factory=EmbedParams)
     dedup: DedupParams = field(default_factory=DedupParams)
+
+
+def from_dict(d: dict) -> PipelineParams:
+    """Rebuild params saved next to a walk. JSON has no tuples, so the fields
+    that are tuples come back as lists and are converted here."""
+    faces = dict(d.get("faces", {}))
+    if "yaws" in faces:
+        faces["yaws"] = tuple(faces["yaws"])
+    gate = dict(d.get("gate", {}))
+    if "band" in gate:
+        gate["band"] = tuple(gate["band"])
+    return PipelineParams(
+        extract=ExtractParams(**d.get("extract", {})),
+        faces=FaceParams(**faces),
+        gate=GateParams(**gate),
+        embed=EmbedParams(**d.get("embed", {})),
+        dedup=DedupParams(**d.get("dedup", {})),
+    )

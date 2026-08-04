@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchJobs, fetchWalk, fetchWalks, postDecision } from './api'
-import type { Decision, Face, Group, Job, WalkDetail, WalkSummary } from './api'
+import { fetchJobs, fetchWalk, fetchWalks, postDecision, postRerun } from './api'
+import type { Decision, Face, Group, Job, Pending, WalkDetail, WalkSummary } from './api'
 import Ingest from './Ingest'
 import Inspector from './Inspector'
-import Pipeline from './Pipeline'
+import Pipeline, { rerunLabel } from './Pipeline'
 
 // cosines this close to tau (0.94) deserve a second look
 const BORDERLINE = 0.955
@@ -232,6 +232,10 @@ export default function App() {
   const [ingesting, setIngesting] = useState(false)
   const [view, setView] = useState<'pipeline' | 'review'>('pipeline')
   const [inspect, setInspect] = useState<string | null>(null)
+  // settings edited but not yet applied, Railway style: the canvas marks what
+  // they would re-run and nothing happens until Apply
+  const [pending, setPending] = useState<Pending>({})
+  const [applying, setApplying] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const exportUrl = selected
@@ -260,6 +264,7 @@ export default function App() {
     setWalk(null)
     setView('pipeline')
     setInspect(null)
+    setPending({})
     // a queued or running walk has no manifest yet: the canvas runs off the
     // job until it lands, so a 404 here is expected rather than an error
     fetchWalk(selected).then(setWalk).catch(() => setWalk(null))
@@ -283,6 +288,18 @@ export default function App() {
     }, active ? 2000 : 8000)
     return () => clearInterval(t)
   }, [active, refreshWalks, selected, walk])
+
+  const dirtyFrom = pending.tau != null ? 'select' : null
+
+  const apply = useCallback(() => {
+    if (!selected) return
+    setApplying(true)
+    postRerun(selected, pending)
+      .then(() => Promise.all([fetchWalk(selected), fetchWalks()]))
+      .then(([w, ws]) => { setWalk(w); setWalks(ws); setPending({}) })
+      .catch((e) => setError(String(e)))
+      .finally(() => setApplying(false))
+  }, [selected, pending])
 
   const onDecision = useCallback((d: Decision) => {
     if (!selected) return
@@ -383,7 +400,24 @@ export default function App() {
           />
         )}
         {!error && !ingesting && (walk || running) && view === 'pipeline' && (
-          <Pipeline walk={walk} job={job} selected={inspect} onSelect={setInspect} />
+          <>
+            {dirtyFrom && (
+              <div className="pill">
+                <span className="pill-text">
+                  1 change <span className="pill-dim">·</span> re-runs{' '}
+                  {rerunLabel(dirtyFrom)}
+                </span>
+                <button className="pill-discard" onClick={() => setPending({})}>
+                  Discard
+                </button>
+                <button className="pill-apply" onClick={apply} disabled={applying}>
+                  {applying ? 'Applying…' : 'Apply'}
+                </button>
+              </div>
+            )}
+            <Pipeline walk={walk} job={job} selected={inspect}
+                      dirtyFrom={dirtyFrom} onSelect={setInspect} />
+          </>
         )}
         {!error && !ingesting && walk && view === 'review' && (
           <>
@@ -418,7 +452,8 @@ export default function App() {
             </button>
           </div>
           <div className="insp-body">
-            <Inspector stage={inspect} walk={walk} onOpenReview={() => setView('review')} />
+            <Inspector stage={inspect} walk={walk} pending={pending}
+                       onEdit={setPending} onOpenReview={() => setView('review')} />
           </div>
         </aside>
       )}

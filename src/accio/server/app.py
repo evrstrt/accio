@@ -16,7 +16,7 @@ import json
 import os
 import shutil
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +26,8 @@ from pydantic import BaseModel
 
 from ..core import export, extract
 from ..core.params import PipelineParams
+from ..core.params import from_dict as params_from_dict
+from ..jobs import pipeline
 from ..jobs.runner import Runner
 from ..store import db
 
@@ -185,12 +187,40 @@ def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
     }
 
 
+def walk_params(walk_id: str) -> PipelineParams:
+    """The settings a walk was actually built with, not today's defaults."""
+    saved = walk_dir(walk_id) / "params.json"
+    if saved.exists():
+        return params_from_dict(json.loads(saved.read_text()))
+    return PipelineParams()
+
+
 def pipeline_spec(walk_id: str) -> dict:
     """The stage settings this walk was built with, plus the embedder that
     actually ran (the npz records it, so a model swap stays visible)."""
     npz = walk_dir(walk_id) / "embeddings.npz"
     model = str(np.load(npz)["model"]) if npz.exists() else ""
-    return dict(asdict(PipelineParams()), embed_model_used=model)
+    return dict(asdict(walk_params(walk_id)), embed_model_used=model)
+
+
+class Rerun(BaseModel):
+    tau: float | None = None
+
+
+@app.post("/api/walks/{walk_id}/rerun")
+def rerun(walk_id: str, r: Rerun) -> dict:
+    """Apply staged settings. Only Select is editable so far, and it re-runs
+    from the cached embeddings: seconds, no stitch, no GPU."""
+    out = walk_dir(walk_id)
+    params = walk_params(walk_id)
+    if r.tau is not None:
+        if not 0 < r.tau < 1:
+            raise HTTPException(422, "tau must be between 0 and 1")
+        params = replace(params, dedup=replace(params.dedup, tau=r.tau))
+    try:
+        return pipeline.reselect(out, params)
+    except FileNotFoundError:
+        raise HTTPException(409, "this walk has no cached embeddings; re-ingest it")
 
 
 class Decision(BaseModel):

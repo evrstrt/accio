@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { WalkDetail } from './api'
+import type { Pending, WalkDetail } from './api'
 
 // Per-stage panels. The controls are mock: uncontrolled inputs with no
 // handlers, so they move but change nothing. What each stage exposes here is
@@ -50,9 +50,11 @@ function Out({ children }: { children: ReactNode }) {
   return <div className="insp-out">{children}</div>
 }
 
-export default function Inspector({ stage, walk, onOpenReview }: {
+export default function Inspector({ stage, walk, pending, onEdit, onOpenReview }: {
   stage: string
   walk: WalkDetail
+  pending: Pending
+  onEdit: (p: Pending) => void
   onOpenReview: () => void
 }) {
   const { stages: s, pipeline: p, meta } = walk
@@ -161,7 +163,19 @@ export default function Inspector({ stage, walk, onOpenReview }: {
           <Row label="Threshold"><Select value="fixed" options={['fixed', 'per video (auto)']} /></Row>
         </Group>
         <Group title="settings">
-          <Row label="τ"><Num value={p.dedup.tau} step={0.005} /></Row>
+          <Row label="τ">
+            {/* the one live control: editing stages a re-run, it does not
+                apply until Apply */}
+            <input
+              className="insp-control num"
+              type="number" step={0.005} min={0.5} max={0.999}
+              value={pending.tau ?? p.dedup.tau}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                onEdit(Number.isFinite(v) && v !== p.dedup.tau ? { tau: v } : {})
+              }}
+            />
+          </Row>
           <Row label="Scope"><Select value="per walk" options={['per walk', 'across walks']} /></Row>
         </Group>
         <Out>{s.absorbed} absorbed, {s.anchors} anchors</Out>

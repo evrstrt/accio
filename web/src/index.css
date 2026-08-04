@@ -452,6 +452,65 @@ select.insp-control { cursor: pointer; }
   box-shadow: 0 0 0 1px var(--z-blue), var(--z-shadow);
 }
 
+/* a staged edit marks its stage and everything downstream: this is what an
+   Apply would re-compute */
+.node.dirty {
+  border-style: dashed;
+  border-color: var(--z-amber);
+}
+
+.node.dirty.selected { border-style: solid; }
+
+/* --- the staged-changes pill, floating over the canvas --- */
+
+.pill {
+  position: sticky;
+  top: calc(var(--topbar-h) + 12px);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  margin: 0 auto 4px;
+  padding: 6px 6px 6px 12px;
+  background: #fff;
+  border: 1px solid var(--z-border);
+  border-radius: 6px;
+  box-shadow: var(--z-shadow-pop);
+}
+
+.pill-text { font-size: 13px; }
+.pill-dim { color: var(--z-muted); }
+
+.pill-discard {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--z-icon);
+  font-size: 13px;
+  transition: background-color 0.12s;
+}
+
+.pill-discard:hover { background: rgba(0, 0, 0, 0.05); }
+
+.pill-apply {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--z-blue);
+  color: #fff;
+  font-size: 13px;
+  box-shadow: hsl(219, 93%, 30%) 0 -2px 0 0 inset;
+  transition: background-color 0.12s, transform 0.05s;
+}
+
+.pill-apply:hover:not(:disabled) { background: hsl(219, 93%, 40%); }
+.pill-apply:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
+.pill-apply:disabled { opacity: 0.6; cursor: default; }
+
 .node.dragging {
   cursor: grabbing;
   z-index: 2;

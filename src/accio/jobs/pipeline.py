@@ -8,6 +8,7 @@ row. The ingest job calls this; there is no other entry point.
 
 import csv
 import json
+from dataclasses import asdict
 from itertools import batched
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from ..core.embed import Embedder
 from ..core.params import PipelineParams
 
 EMBED_CHUNK = 64  # faces held in memory at once on the way to the embedder
+MANIFEST_COLUMNS = ["pano_idx", "t_sec", "yaw", "path", "kept", "anchor", "cosine"]
 
 
 def face_name(pano_idx: int, yaw: int) -> str:
@@ -80,19 +82,63 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
 
     say("select", "running")
     result = greedy_dedup(embeddings, params.dedup)
+    write_manifest(out / "manifest.csv",
+                   [(p.index, p.t_sec, yaw, path.name) for p, yaw, path in records],
+                   result)
+    save_params(out, params)
+    kept = len(result.kept)
+    say("select", "done", anchors=kept, absorbed=len(records) - kept)
 
+    return dict(walk=walk, panos=len(panos), sharp=len(sharp),
+                faces=len(records), kept=kept)
+
+
+def write_manifest(path: Path, faces_out: list[tuple[int, float, int, str]],
+                   result) -> None:
+    """One row per face in capture order, with the group it landed in.
+
+    faces_out is (pano_idx, t_sec, yaw, file name); the dedup result supplies
+    kept / anchor / cosine. Shared by the full run and by a re-select, so the
+    two can never disagree about the manifest's shape.
+    """
     kept = set(result.kept)
-    with open(out / "manifest.csv", "w", newline="") as f:
+    with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["pano_idx", "t_sec", "yaw", "path", "kept", "anchor", "cosine"])
-        for i, (p, yaw, path) in enumerate(records):
+        w.writerow(MANIFEST_COLUMNS)
+        for i, (pano_idx, t_sec, yaw, name) in enumerate(faces_out):
             anchor, cos = ("", "")
             if i in result.anchor_of:
                 a, c = result.anchor_of[i]
                 anchor, cos = str(a), f"{c:.4f}"
-            w.writerow([p.index, f"{p.t_sec:.1f}", yaw, path.name,
-                        int(i in kept), anchor, cos])
-    say("select", "done", anchors=len(kept), absorbed=len(records) - len(kept))
+            w.writerow([pano_idx, f"{t_sec:.1f}", yaw, name, int(i in kept),
+                        anchor, cos])
 
-    return dict(walk=walk, panos=len(panos), sharp=len(sharp),
-                faces=len(records), kept=len(kept))
+
+def save_params(out: Path, params: PipelineParams) -> None:
+    """The settings this walk's frames were built with, next to the frames."""
+    (out / "params.json").write_text(json.dumps(asdict(params), indent=1))
+
+
+def reselect(walk_out: Path, params: PipelineParams) -> dict:
+    """Re-run selection alone, from the embeddings already on disk.
+
+    Everything upstream of Select is unchanged by a threshold, so this costs
+    a dedup pass and a manifest rewrite rather than a stitch and a GPU pass.
+    Face files and their names are untouched, which is what lets review
+    decisions (keyed by name) survive the change.
+    """
+    with np.load(walk_out / "embeddings.npz") as data:
+        embeddings = data["embeddings"]
+    with open(walk_out / "manifest.csv") as f:
+        rows = list(csv.DictReader(f))
+    if len(rows) != len(embeddings):
+        raise ValueError(f"manifest has {len(rows)} rows but "
+                         f"{len(embeddings)} embeddings")
+
+    result = greedy_dedup(embeddings, params.dedup)
+    write_manifest(walk_out / "manifest.csv",
+                   [(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]), r["path"])
+                    for r in rows], result)
+    save_params(walk_out, params)
+    kept = len(result.kept)
+    return dict(faces=len(rows), anchors=kept, absorbed=len(rows) - kept)
