@@ -265,9 +265,12 @@ button {
 .funnel .n.drop-n { color: var(--z-red); }
 .funnel .arrow, .funnel .label { color: var(--z-muted); }
 
-/* panel title, same weight as the sidebar header */
+/* Panel title, same weight as the sidebar header. line-height 1 so the space
+   above the letterforms is the padding, not the padding plus half-leading. */
 .section-title {
   margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1;
   font-weight: 500;
   color: #000;
 }
@@ -487,7 +490,7 @@ button {
    it, so 4 px like every other panel, on the flat shadow. */
 .ingest {
   max-width: 512px;
-  padding: 20px 16px 16px;
+  padding: 16px;
   background: #fff;
   border: 1px solid var(--z-border);
   border-radius: 4px;
