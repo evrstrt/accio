@@ -99,6 +99,11 @@ const BLOCKS: Block[] = [
   },
 ]
 
+const LAYOUT_KEY = 'accio.pipeline.layout'
+
+// the stages a machine re-runs; Video is the upload and Review is people
+const MACHINE = ['stitch', 'gate', 'faces', 'embed', 'select']
+
 /** What each block shows and how it looks, from a finished walk or a live job.
     Video and Review bracket the machine stages: Video is done as soon as the
     upload is in, Review only becomes available once the run finishes. */
@@ -111,18 +116,22 @@ function stageView(b: Block, walk: WalkDetail | null, job: Job | null) {
       : b.id === 'review' ? (live || !walk ? 'queued' : 'done')
       : live ? job.stages[b.id] ?? 'queued'
       : walk ? 'done' : 'queued'
-  const done = state === 'done'
+  // a stage above the one a re-run entered at was not touched, so what the
+  // manifest says about it is still true; at and below, only the job knows
+  const reused = live && !!job.first
+    && MACHINE.indexOf(b.id) < MACHINE.indexOf(job.first)
+  // and the settings on screen are the ones running, not the ones last saved
+  const shown = live && job.params && walk
+    ? { ...walk, pipeline: { ...walk.pipeline, ...job.params } }
+    : walk
   return {
     state,
-    sub: walk ? b.sub(walk) : b.idle,
-    stat: done && walk ? b.stat(walk) : (job && b.live?.(job.stats)) || '',
+    sub: shown ? b.sub(shown) : b.idle,
+    stat: live && !reused
+      ? (job && b.live?.(job.stats)) || ''
+      : (state === 'done' && walk ? b.stat(walk) : ''),
   }
 }
-
-const LAYOUT_KEY = 'accio.pipeline.layout'
-
-// the stages a machine re-runs; Video is the upload and Review is people
-const MACHINE = ['stitch', 'gate', 'faces', 'embed', 'select']
 
 /** "Faces, Embed, Select": what editing this stage will actually re-run. */
 export function rerunLabel(from: string): string {

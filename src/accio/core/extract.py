@@ -13,6 +13,7 @@ of the frame index, never the other way around. The store and export layers
 import these instead of re-parsing filenames.
 """
 
+import json
 import re
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ from .params import ExtractParams
 
 PANO_PREFIX = "pano_"
 PANO_EXT = ".jpg"
+PANO_INDEX = "panos.json"
 
 
 def pano_name(index: int) -> str:
@@ -140,13 +142,33 @@ def stitch(video: Path, pano_dir: Path, params: ExtractParams) -> list[PanoFrame
         path = pano_dir / pano_name(index)
         exported[frame_no].rename(path)
         frames.append(PanoFrame(index=index, t_sec=frame_no / native_fps, path=path))
+    save_panos(pano_dir, frames)
     return frames
 
 
-def pano_frames(pano_dir: Path, fps: float) -> list[PanoFrame]:
-    """List extracted panoramas with their timestamps, in walk order."""
-    frames = []
-    for path in sorted(pano_dir.glob(f"{PANO_PREFIX}*{PANO_EXT}")):
-        index = pano_index(path)
-        frames.append(PanoFrame(index=index, t_sec=index / fps, path=path))
+def save_panos(pano_dir: Path, frames: list[PanoFrame]) -> None:
+    """Record which source frame each panorama came from.
+
+    A timestamp cannot be re-derived from the file name without re-deriving the
+    decimation, and it is what calibration times its neighbour frames off. So
+    the stitch writes it down and every later stage reads it instead of guessing.
+    """
+    (pano_dir / PANO_INDEX).write_text(json.dumps(
+        [{"index": f.index, "tSec": f.t_sec} for f in frames]))
+
+
+def load_panos(pano_dir: Path) -> list[PanoFrame]:
+    """The panoramas a previous stitch left behind, in walk order."""
+    index = pano_dir / PANO_INDEX
+    if not index.exists():
+        raise FileNotFoundError(
+            f"{pano_dir.parent.name} was stitched before panoramas recorded "
+            "their timestamps; re-ingest it to change this stage")
+    recorded = json.loads(index.read_text())
+    frames = [PanoFrame(index=r["index"], t_sec=r["tSec"],
+                        path=pano_dir / pano_name(r["index"])) for r in recorded]
+    missing = [f.path.name for f in frames if not f.path.exists()]
+    if missing:
+        raise FileNotFoundError(f"{len(missing)} stitched panoramas are gone "
+                                f"(first: {missing[0]})")
     return frames

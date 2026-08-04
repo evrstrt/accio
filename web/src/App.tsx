@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
-         postRerun } from './api'
-import type { Calibration, Decision, Face, Group, Job, Pending, WalkDetail,
-              WalkSummary } from './api'
+         postRerun, STAGE_OF } from './api'
+import type { Calibration, Decision, Face, Group, Job, Pending, Section,
+              WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
 import Ingest from './Ingest'
 import Inspector from './Inspector'
@@ -10,6 +10,22 @@ import Pipeline, { rerunLabel } from './Pipeline'
 
 // cosines this close to tau (0.94) deserve a second look
 const BORDERLINE = 0.955
+
+const ORDER = ['stitch', 'gate', 'faces', 'embed', 'select']
+
+/** Fold one edit into the staged set. A value put back to what the walk
+    actually ran is not a change, so it un-stages instead of piling up. */
+function stage(pending: Pending, spec: Record<string, any>,
+               section: Section, key: string, value: unknown): Pending {
+  const next: Record<string, any> = { ...pending }
+  const sec = { ...(next[section] ?? {}) }
+  const same = JSON.stringify(spec[section]?.[key]) === JSON.stringify(value)
+  if (same) delete sec[key]
+  else sec[key] = value
+  if (Object.keys(sec).length === 0) delete next[section]
+  else next[section] = sec
+  return next as Pending
+}
 
 function pickFace(g: Group): Face {
   return g.pick === g.anchor.idx
@@ -239,6 +255,7 @@ export default function App() {
   // they would re-run and nothing happens until Apply
   const [pending, setPending] = useState<Pending>({})
   const [applying, setApplying] = useState(false)
+  const [refused, setRefused] = useState<string | null>(null)
   const [calib, setCalib] = useState<Calibration | null>(null)
   const [showCalib, setShowCalib] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -247,6 +264,7 @@ export default function App() {
     ? `/api/walks/${encodeURIComponent(selected)}/export` : ''
   const job = jobs.find((j) => j.walkId === selected) ?? null
   const running = job !== null && job.status !== 'done'
+  const activeJobs = jobs.filter((j) => j.status !== 'done')
 
   const refreshWalks = useCallback(
     () => fetchWalks().then(setWalks).catch((e) => setError(String(e))),
@@ -270,6 +288,7 @@ export default function App() {
     setView('pipeline')
     setInspect(null)
     setPending({})
+    setRefused(null)
     // a queued or running walk has no manifest yet: the canvas runs off the
     // job until it lands, so a 404 here is expected rather than an error
     setCalib(null)
@@ -279,37 +298,64 @@ export default function App() {
     fetchCalibration(selected).then(setCalib).catch(() => setCalib(null))
   }, [selected])
 
+  const reload = useCallback((id: string) =>
+    Promise.all([fetchWalk(id), fetchWalks()])
+      .then(([w, ws]) => { setWalk(w); setWalks(ws) })
+      .then(() => fetchCalibration(id).then(setCalib).catch(() => setCalib(null))),
+    [])
+
   // Poll jobs always, fast while something is in flight and slowly otherwise:
   // a run can start in another tab, and stopping entirely means the rail never
   // notices it.
   const active = jobs.some((j) => j.status === 'queued' || j.status === 'running')
+  const watching = useRef<number | null>(null)
   useEffect(() => {
     const t = setInterval(() => {
       fetchJobs().then((js) => {
         setJobs(js)
         const mine = js.find((j) => j.walkId === selected)
-        if (mine?.status === 'done' && !walk && selected) {
-          fetchWalk(selected).then(setWalk).catch(() => {})
+        // a job of ours finishing is the moment the frames on disk changed,
+        // whether it was an ingest or a settings change
+        if (mine && selected && mine.status !== 'done') watching.current = mine.id
+        else if (mine?.status === 'done' && selected
+                 && (watching.current === mine.id || !walk)) {
+          watching.current = null
+          reload(selected).catch(() => {})
         }
         const stillActive = js.some((j) => j.status === 'queued' || j.status === 'running')
         if (!stillActive) refreshWalks()
       }).catch(() => {})
     }, active ? 2000 : 8000)
     return () => clearInterval(t)
-  }, [active, refreshWalks, selected, walk])
+  }, [active, refreshWalks, reload, selected, walk])
 
-  const dirtyFrom = pending.tau != null || pending.rule ? 'select' : null
+  const edited = Object.values(pending).reduce(
+    (n, sec) => n + Object.keys(sec ?? {}).length, 0)
+  const dirtyFrom = ORDER.find((s) => Object.keys(pending).some(
+    (k) => STAGE_OF[k as Section] === s)) ?? null
+
+  const onEdit = useCallback((section: Section, key: string, value: unknown) => {
+    if (!walk) return
+    setPending((prev) => stage(prev, walk.pipeline, section, key, value))
+  }, [walk])
 
   const apply = useCallback(() => {
     if (!selected) return
     setApplying(true)
+    setRefused(null)
     postRerun(selected, pending)
-      .then(() => Promise.all([fetchWalk(selected), fetchWalks()]))
-      .then(([w, ws]) => { setWalk(w); setWalks(ws); setPending({}) })
-      .then(() => fetchCalibration(selected).then(setCalib).catch(() => {}))
-      .catch((e) => setError(String(e)))
+      .then((res) => {
+        setPending({})
+        // a re-select is already done; anything heavier is now a job, and the
+        // canvas follows it stage by stage until it lands
+        if (res.id != null) return fetchJobs().then(setJobs)
+        return reload(selected)
+      })
+      // a refused change keeps the edits staged: the pill says why and the
+      // walk on screen is still the one on disk
+      .catch((e) => setRefused(e instanceof Error ? e.message : String(e)))
       .finally(() => setApplying(false))
-  }, [selected, pending])
+  }, [selected, pending, reload])
 
   const onDecision = useCallback((d: Decision) => {
     if (!selected) return
@@ -371,11 +417,12 @@ export default function App() {
             </svg>
           </button>
         </div>
-        {jobs.filter((j) => j.status !== 'done').map((j) => (
+        {activeJobs.map((j) => (
           <JobItem key={j.id} job={j} active={j.walkId === selected}
                    onClick={() => { setIngesting(false); setSelected(j.walkId) }} />
         ))}
-        {walks?.map((w) => (
+        {/* a walk being re-run is already in the rail above, as a job */}
+        {walks?.filter((w) => !activeJobs.some((j) => j.walkId === w.id)).map((w) => (
           <button
             key={w.id}
             className={`walk-item${!ingesting && w.id === selected ? ' active' : ''}`}
@@ -412,12 +459,18 @@ export default function App() {
         {!error && !ingesting && (walk || running) && view === 'pipeline' && (
           <>
             {dirtyFrom && (
-              <div className="pill">
+              <div className={`pill${refused ? ' refused' : ''}`}>
                 <span className="pill-text">
-                  1 change <span className="pill-dim">·</span> re-runs{' '}
-                  {rerunLabel(dirtyFrom)}
+                  {refused ?? (
+                    <>
+                      {edited} change{edited === 1 ? '' : 's'}{' '}
+                      <span className="pill-dim">·</span> re-runs{' '}
+                      {rerunLabel(dirtyFrom)}
+                    </>
+                  )}
                 </span>
-                <button className="pill-discard" onClick={() => setPending({})}>
+                <button className="pill-discard"
+                        onClick={() => { setPending({}); setRefused(null) }}>
                   Discard
                 </button>
                 <button className="pill-apply" onClick={apply} disabled={applying}>
@@ -463,7 +516,7 @@ export default function App() {
           </div>
           <div className="insp-body">
             <Inspector stage={inspect} walk={walk} pending={pending} calib={calib}
-                       onEdit={setPending} onOpenReview={() => setView('review')}
+                       onEdit={onEdit} onOpenReview={() => setView('review')}
                        onShowCalibration={() => setShowCalib(true)} />
           </div>
         </aside>

@@ -1,7 +1,9 @@
 from pathlib import Path
 
-from accio.core.extract import (frame_numbers, front_lens, lens_files,
-                                pano_frames, sdk_cmd)
+import pytest
+
+from accio.core.extract import (PanoFrame, frame_numbers, front_lens,
+                                lens_files, load_panos, save_panos, sdk_cmd)
 from accio.core.params import ExtractParams
 
 
@@ -48,13 +50,30 @@ def test_sdk_cmd_flowstate_on_and_inputs_not_last(tmp_path):
     assert cmd[i].startswith("-")
 
 
-def test_pano_frames_ordering_and_timestamps(tmp_path):
-    for i in (2, 0, 1, 10):
-        (tmp_path / f"pano_{i:05d}.jpg").touch()
-    frames = pano_frames(tmp_path, fps=2.0)
-    assert [f.index for f in frames] == [0, 1, 2, 10]
-    assert [f.t_sec for f in frames] == [0.0, 0.5, 1.0, 5.0]
+def written(tmp_path, t_secs):
+    frames = []
+    for i, t in enumerate(t_secs):
+        path = tmp_path / f"pano_{i:05d}.jpg"
+        path.touch()
+        frames.append(PanoFrame(index=i, t_sec=t, path=path))
+    save_panos(tmp_path, frames)
+    return frames
 
 
-def test_pano_frames_empty_dir(tmp_path):
-    assert pano_frames(tmp_path, fps=2.0) == []
+def test_panos_round_trip_with_their_true_timestamps(tmp_path):
+    # 15-frame decimation of 29.97 fps footage: not the 0.5s a nominal 2 fps
+    # would give, which is exactly why the stitch records it
+    frames = written(tmp_path, [0.0, 0.5005, 1.001])
+    assert load_panos(tmp_path) == frames
+
+
+def test_load_panos_says_which_panoramas_are_missing(tmp_path):
+    written(tmp_path, [0.0, 0.5005])
+    (tmp_path / "pano_00001.jpg").unlink()
+    with pytest.raises(FileNotFoundError, match="pano_00001"):
+        load_panos(tmp_path)
+
+
+def test_panos_empty_walk(tmp_path):
+    save_panos(tmp_path, [])
+    assert load_panos(tmp_path) == []

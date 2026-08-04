@@ -75,6 +75,8 @@ export type Job = {
   stages: Record<string, StageState>
   stats: Record<string, number>            // counts each stage emitted
   error: string
+  first: string                            // '' for an ingest, else where a re-run entered
+  params: Partial<PipelineSpec> | null     // the settings this run is using
 }
 
 export type Decision = {
@@ -85,7 +87,12 @@ export type Decision = {
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`)
+  if (!res.ok) {
+    // the server says why in `detail`; without it every failure reads the same
+    const detail = await res.json().then((b) => b?.detail).catch(() => null)
+    const said = Array.isArray(detail) ? detail[0]?.msg : detail
+    throw new Error(said || `${res.status} ${res.statusText} for ${url}`)
+  }
   return res.json()
 }
 
@@ -122,17 +129,37 @@ export const fetchCalibration = (walkId: string) =>
 
 export const fetchJobs = () => req<Job[]>('/api/jobs')
 
-// staged settings, applied to an existing walk (Select re-runs from the
-// cached embeddings, so this returns in seconds)
-export type Pending = { tau?: number; rule?: 'fixed' | 'calibrated' }
+// Settings edited but not yet applied, by the section of the pipeline params
+// they belong to. The server folds them in and re-runs from the earliest stage
+// they invalidate, so the shape here is the shape it validates against.
+export type Pending = {
+  gate?: { window?: number; band?: [number, number] }
+  faces?: { fov_deg?: number; size?: number; yaws?: number[] }
+  dedup?: { tau?: number; rule?: 'fixed' | 'calibrated' }
+}
+
+export type Section = keyof Pending
+
+// which stage owns each section: editing it re-runs that stage and the rest
+export const STAGE_OF: Record<Section, string> = {
+  gate: 'gate', faces: 'faces', dedup: 'select',
+}
+
+/** A re-select answers with the new counts; anything heavier answers with the
+    job now running, and the canvas follows it from there. */
+export type RerunResult = {
+  changed: boolean
+  anchors?: number
+  absorbed?: number
+  id?: number
+}
 
 export const postRerun = (walkId: string, p: Pending) =>
-  req<{ faces: number; anchors: number; absorbed: number }>(
-    `/api/walks/${encodeURIComponent(walkId)}/rerun`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(p),
-    })
+  req<RerunResult>(`/api/walks/${encodeURIComponent(walkId)}/rerun`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  })
 
 // XHR instead of fetch: multi-GB .insv uploads need progress events
 export const postIngest = (form: FormData, onProgress?: (frac: number) => void) =>

@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core import export, extract
 from ..core.params import PipelineParams
@@ -203,29 +203,116 @@ def pipeline_spec(walk_id: str) -> dict:
     return dict(asdict(walk_params(walk_id)), embed_model_used=model)
 
 
-class Rerun(BaseModel):
-    tau: float | None = None
+# which stage a section of the settings belongs to: editing it invalidates
+# that stage and everything below it
+STAGE_OF = {"extract": "stitch", "gate": "gate", "faces": "faces",
+            "embed": "embed", "dedup": "select"}
+
+
+class GatePatch(BaseModel):
+    window: int | None = Field(None, ge=1, le=120)
+    band: tuple[float, float] | None = None
+
+
+class FacesPatch(BaseModel):
+    fov_deg: float | None = Field(None, gt=10, lt=180)
+    size: int | None = Field(None, ge=64, le=4096)
+    yaws: list[int] | None = None
+
+
+class DedupPatch(BaseModel):
+    tau: float | None = Field(None, gt=0, lt=1)
     rule: str | None = None      # 'fixed' | 'calibrated'
+
+
+class Rerun(BaseModel):
+    """Staged settings, by the section of the params they belong to."""
+    gate: GatePatch | None = None
+    faces: FacesPatch | None = None
+    dedup: DedupPatch | None = None
+
+
+def check(r: Rerun) -> None:
+    """The constraints that are about more than one field."""
+    if r.gate and r.gate.band is not None:
+        lo, hi = r.gate.band
+        if not 0 <= lo < hi <= 1:
+            raise HTTPException(422, "the band must be a top below a bottom, "
+                                     "both within the panorama")
+    if r.faces and r.faces.yaws is not None:
+        y = r.faces.yaws
+        if not y or len(set(y)) != len(y) or any(not 0 <= v < 360 for v in y):
+            raise HTTPException(422, "yaws must be distinct headings under 360")
+    if r.dedup and r.dedup.rule is not None and r.dedup.rule not in (
+            "fixed", "calibrated"):
+        raise HTTPException(422, f"unknown threshold rule {r.dedup.rule!r}")
+
+
+def merge(params: PipelineParams, r: Rerun) -> tuple[PipelineParams, str | None]:
+    """Fold the patch into the walk's params and name the earliest stage it
+    invalidates. Fields set back to what the walk already ran are not changes."""
+    changed: list[str] = []
+    for section in STAGE_OF:
+        patch = getattr(r, section, None)
+        if patch is None:
+            continue
+        current = getattr(params, section)
+        # JSON has no tuples; the params dataclasses do
+        fields = {k: (tuple(v) if isinstance(v, list) else v)
+                  for k, v in patch.model_dump().items() if v is not None}
+        fields = {k: v for k, v in fields.items() if getattr(current, k) != v}
+        if not fields:
+            continue
+        params = replace(params, **{section: replace(current, **fields)})
+        changed.append(STAGE_OF[section])
+    first = min(changed, key=pipeline.STAGES.index, default=None)
+    return params, first
 
 
 @app.post("/api/walks/{walk_id}/rerun")
 def rerun(walk_id: str, r: Rerun) -> dict:
-    """Apply staged settings. Only Select is editable so far, and it re-runs
-    from the cached embeddings: seconds, no stitch, no GPU."""
+    """Apply staged settings, re-running from the earliest stage they touch.
+
+    A threshold change re-selects from the cached embeddings and returns the new
+    counts straight away. Anything above Select re-renders frames, so it queues
+    on the worker and the canvas follows it stage by stage.
+    """
     out = walk_dir(walk_id)
-    params = walk_params(walk_id)
-    if r.rule is not None:
-        if r.rule not in ("fixed", "calibrated"):
-            raise HTTPException(422, f"unknown threshold rule {r.rule!r}")
-        params = replace(params, dedup=replace(params.dedup, rule=r.rule))
-    if r.tau is not None:
-        if not 0 < r.tau < 1:
-            raise HTTPException(422, "tau must be between 0 and 1")
-        params = replace(params, dedup=replace(params.dedup, tau=r.tau))
-    try:
-        return pipeline.reselect(out, params)
-    except FileNotFoundError:
-        raise HTTPException(409, "this walk has no cached embeddings; re-ingest it")
+    check(r)
+    if runner().busy(walk_id):
+        raise HTTPException(409, "this walk is already running")
+    params, first = merge(walk_params(walk_id), r)
+    if first is None:
+        return {"changed": False}
+    # the calibrated rule takes its threshold from a measurement; without one it
+    # would save the rule and quietly leave tau where it was
+    if params.dedup.rule == "calibrated" and pipeline.read_calibration(out) is None:
+        raise HTTPException(409, f"{walk_id} is set to the calibrated threshold "
+                                 "but was never measured; re-ingest it")
+    if first == "select":
+        try:
+            return dict(pipeline.reselect(out, params), changed=True)
+        except FileNotFoundError:
+            raise HTTPException(409, "this walk has no cached embeddings; "
+                                     "re-ingest it")
+    # a walk stitched before the pipeline recorded its own inputs cannot be
+    # re-entered partway; say so here rather than as a traceback on the worker
+    if not all((out / f).exists() for f in ("source.json", "pano/panos.json")):
+        raise HTTPException(409, f"{walk_id} was made before stage re-runs; "
+                                 "re-ingest it to change this stage")
+    video = walk_video(walk_id)
+    return dict(runner().submit(video, first=first, params=params,
+                                walk_id=walk_id).public(), changed=True)
+
+
+def walk_video(walk_id: str) -> Path:
+    """The original the walk was made from; a re-render reads it again."""
+    meta = db.walk_meta(conn(), walk_id) or {}
+    video = VIDEO_DIR / Path(meta.get("videoFile") or f"{walk_id}.insv").name
+    if not video.exists():
+        raise HTTPException(409, f"the original video for {walk_id} is gone; "
+                                 "re-ingest it to change this stage")
+    return video
 
 
 class Decision(BaseModel):

@@ -584,6 +584,10 @@ select.insp-control { cursor: pointer; }
 .pill-text { font-size: 13px; }
 .pill-dim { color: var(--z-muted); }
 
+/* a refused change: the edits stay staged and the pill says why */
+.pill.refused { border-color: rgba(228, 0, 20, 0.4); max-width: 640px; }
+.pill.refused .pill-text { color: var(--z-red); }
+
 .pill-discard {
   height: 24px;
   padding: 0 8px;
