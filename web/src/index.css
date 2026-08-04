@@ -286,6 +286,37 @@ button {
   color: #000;
 }
 
+/* --- inspector: the panel a stage opens, docked opposite the sidebar ----- */
+
+.inspector {
+  position: fixed;
+  right: 0;
+  top: var(--topbar-h);
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  background: var(--z-bg);
+  border-left: 1px solid var(--z-border);
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--z-border);
+}
+
+.inspector-title {
+  flex: 1;
+  font-weight: 500;
+  text-transform: capitalize;
+  user-select: none;
+}
+
 /* --- pipeline canvas ---------------------------------------------------- */
 
 .canvas { position: relative; width: 100%; margin-top: 4px; }
@@ -320,8 +351,12 @@ button {
   transition: border-color 0.12s, box-shadow 0.12s;
 }
 
-.node.opens { cursor: pointer; }
 .node:hover { border-color: var(--z-blue-border); }
+
+.node.selected {
+  border-color: var(--z-blue);
+  box-shadow: 0 0 0 1px var(--z-blue), var(--z-shadow);
+}
 
 .node.dragging {
   cursor: grabbing;

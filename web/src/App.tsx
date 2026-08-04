@@ -225,6 +225,7 @@ export default function App() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [ingesting, setIngesting] = useState(false)
   const [view, setView] = useState<'pipeline' | 'review'>('pipeline')
+  const [inspect, setInspect] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const exportUrl = selected
@@ -247,6 +248,7 @@ export default function App() {
     if (!selected) return
     setWalk(null)
     setView('pipeline')
+    setInspect(null)
     fetchWalk(selected).then(setWalk).catch((e) => setError(String(e)))
   }, [selected])
 
@@ -295,7 +297,15 @@ export default function App() {
         </div>
         <div className="top-actions">
           {!ingesting && selected && walk && (
-            <a className="top-btn" href={exportUrl} download>Export</a>
+            <>
+              <button
+                className={`top-btn${view === 'review' ? ' active' : ''}`}
+                onClick={() => setView(view === 'review' ? 'pipeline' : 'review')}
+              >
+                Review
+              </button>
+              <a className="top-btn" href={exportUrl} download>Export</a>
+            </>
           )}
         </div>
       </header>
@@ -351,13 +361,7 @@ export default function App() {
           />
         )}
         {!error && !ingesting && walk && view === 'pipeline' && (
-          <Pipeline
-            walk={walk}
-            onOpen={(what) => {
-              if (what === 'review') setView('review')
-              else window.location.assign(exportUrl)
-            }}
-          />
+          <Pipeline walk={walk} selected={inspect} onSelect={setInspect} />
         )}
         {!error && !ingesting && walk && view === 'review' && (
           <>
@@ -373,6 +377,24 @@ export default function App() {
           <div className="empty">No walks yet. Add one with the + above.</div>
         )}
       </main>
+      {view === 'pipeline' && !ingesting && inspect && (
+        <aside className="inspector">
+          <div className="inspector-head">
+            <span className="inspector-title">{inspect}</span>
+            <button
+              className="icon-btn"
+              onClick={() => setInspect(null)}
+              title="Close"
+              aria-label="Close"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </aside>
+      )}
       </div>
     </div>
   )

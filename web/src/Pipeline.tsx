@@ -15,7 +15,6 @@ type Block = {
   title: string
   sub: (w: WalkDetail) => string
   stat: (w: WalkDetail) => string
-  opens?: 'review' | 'export'
 }
 
 /** "vit_base_patch16_dinov3.lvd1689m" -> "DINOv3 ViT-B/16" */
@@ -69,14 +68,12 @@ const BLOCKS: Block[] = [
     title: 'Review',
     sub: (w) => (w.stages.dropped ? `${w.stages.dropped} dropped` : 'no overrides'),
     stat: (w) => `${w.stages.kept} kept`,
-    opens: 'review',
   },
   {
     id: 'export',
     title: 'Export',
     sub: () => 'zip · EXIF stamped',
     stat: (w) => `${w.stages.kept} frames`,
-    opens: 'export',
   },
 ]
 
@@ -116,14 +113,17 @@ function link(a: Pos, b: Pos): string {
   return `M${x1},${y1} C${x1 + off},${y1} ${x2 - off},${y2} ${x2},${y2}`
 }
 
-export default function Pipeline({ walk, onOpen }: {
+export default function Pipeline({ walk, selected, onSelect }: {
   walk: WalkDetail
-  onOpen: (what: 'review' | 'export') => void
+  selected: string | null
+  onSelect: (id: string | null) => void
 }) {
   const [layout, setLayout] = useState<Record<string, Pos> | null>(savedLayout)
   const [dragging, setDragging] = useState<string | null>(null)
   const canvas = useRef<HTMLDivElement>(null)
-  const drag = useRef<{ id: string; dx: number; dy: number; moved: boolean } | null>(null)
+  const drag = useRef<
+    { id: string; dx: number; dy: number; x0: number; y0: number; moved: boolean } | null
+  >(null)
   const swallowClick = useRef(false)
 
   // first run: centre the column in whatever width the canvas got
@@ -140,18 +140,22 @@ export default function Pipeline({ walk, onOpen }: {
   const onPointerDown = useCallback((e: React.PointerEvent, id: string) => {
     if (e.button !== 0 || !layout) return
     const p = layout[id]
-    drag.current = { id, dx: e.clientX - p.x, dy: e.clientY - p.y, moved: false }
+    swallowClick.current = false   // never carry a swallow into a new gesture
+    drag.current = { id, dx: e.clientX - p.x, dy: e.clientY - p.y,
+                     x0: e.clientX, y0: e.clientY, moved: false }
     setDragging(id)
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
   }, [layout])
 
-  // buttons check as well as the ref: if a pointerup is ever missed (capture
-  // lost, pointer released off-window) the block would otherwise keep
-  // following the cursor with no button held.
+  // Two guards. The buttons check: if a pointerup is ever missed (capture
+  // lost, released off-window) the block would keep following the cursor with
+  // nothing held. The threshold: without it a click that jitters a pixel snaps
+  // the block to the next 8 px, so clicking around slowly scrambles the chain.
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     const d = drag.current
     if (!d) return
     if (!(e.buttons & 1)) { drag.current = null; setDragging(null); return }
+    if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) return
     const x = Math.round((e.clientX - d.dx) / SNAP) * SNAP
     const y = Math.round((e.clientY - d.dy) / SNAP) * SNAP
     setLayout((l) => {
@@ -172,8 +176,8 @@ export default function Pipeline({ walk, onOpen }: {
 
   const onClick = useCallback((block: Block) => {
     if (swallowClick.current) { swallowClick.current = false; return }
-    if (block.opens) onOpen(block.opens)
-  }, [onOpen])
+    onSelect(selected === block.id ? null : block.id)
+  }, [onSelect, selected])
 
   if (!layout) return <div className="canvas" ref={canvas} />
 
@@ -196,7 +200,8 @@ export default function Pipeline({ walk, onOpen }: {
       {BLOCKS.map((b) => (
         <div
           key={b.id}
-          className={`node${b.opens ? ' opens' : ''}${dragging === b.id ? ' dragging' : ''}`}
+          className={`node${selected === b.id ? ' selected' : ''}${
+            dragging === b.id ? ' dragging' : ''}`}
           style={{ left: layout[b.id].x, top: layout[b.id].y }}
           onPointerDown={(e) => onPointerDown(e, b.id)}
           onPointerMove={onPointerMove}
