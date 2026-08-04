@@ -141,16 +141,20 @@ def walk_detail(walk_id: str) -> dict:
         "anchor": int(r["anchor"]) if r["anchor"] else None,
         "cosine": float(r["cosine"]) if r["cosine"] else None,
     } for i, r in enumerate(rows)]
+    # decisions are stored by face name; the API speaks manifest indices, so
+    # translate at the boundary and the stored log survives a re-run
+    idx_of = {r["path"]: i for i, r in enumerate(rows)}
     groups = []
     for f in faces:
         if not f["kept"]:
             continue
-        s = state.get(f["idx"], {"pick": None, "dropped": False})
+        s = state.get(rows[f["idx"]]["path"], {"pick": None, "dropped": False})
+        pick = idx_of.get(s["pick"]) if s["pick"] else None
         groups.append({
             "anchor": f,
             "members": sorted((m for m in faces if m["anchor"] == f["idx"]),
                               key=lambda m: -m["cosine"]),
-            "pick": s["pick"] if s["pick"] is not None else f["idx"],
+            "pick": pick if pick is not None else f["idx"],
             "dropped": s["dropped"],
         })
     return {"id": walk_id, "faces": len(faces), "groups": groups,
@@ -208,7 +212,8 @@ def post_decision(walk_id: str, d: Decision) -> dict:
             or rows[d.pickIdx]["anchor"] == str(d.anchorIdx))
         if not ok:
             raise HTTPException(422, f"{d.pickIdx} is not in group {d.anchorIdx}")
-    db.log_decision(conn(), walk_id, d.anchorIdx, d.action, d.pickIdx)
+    db.log_decision(conn(), walk_id, rows[d.anchorIdx]["path"], d.action,
+                    rows[d.pickIdx]["path"] if d.pickIdx is not None else None)
     return {"ok": True}
 
 

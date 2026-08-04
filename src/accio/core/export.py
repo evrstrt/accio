@@ -38,20 +38,22 @@ def export_name(prefix: str, t_sec: float, yaw: int) -> str:
     return f"{prefix}_t{t_sec:06.1f}_y{yaw:03d}.jpg"
 
 
-def effective_picks(rows: list[dict], state: dict[int, dict]) -> list[tuple[int, dict]]:
+def effective_picks(rows: list[dict], state: dict[str, dict]) -> list[tuple[int, dict]]:
     """(pick_idx, manifest_row) per surviving group, in walk order.
 
     A group survives unless dropped in review; its exported frame is the
-    reviewer's pick, defaulting to the dedup anchor.
+    reviewer's pick, defaulting to the dedup anchor. Review state is keyed by
+    face name, so it still resolves after a re-run renumbers the manifest.
     """
+    idx_of = {r["path"]: i for i, r in enumerate(rows)}
     picks = []
     for i, r in enumerate(rows):
         if r["kept"] != "1":
             continue
-        s = state.get(i, {"pick": None, "dropped": False})
+        s = state.get(r["path"], {"pick": None, "dropped": False})
         if s["dropped"]:
             continue
-        pick = s["pick"] if s["pick"] is not None else i
+        pick = idx_of.get(s["pick"], i) if s["pick"] else i
         picks.append((pick, rows[pick]))
     return picks
 

@@ -34,10 +34,20 @@ def test_slug_and_names():
 
 def test_effective_picks_defaults_swaps_and_drops():
     assert [p for p, _ in effective_picks(ROWS, {})] == [0, 2]
-    swapped = effective_picks(ROWS, {0: {"pick": 1, "dropped": False}})
+    swapped = effective_picks(
+        ROWS, {"y045_00000.jpg": {"pick": "y045_00001.jpg", "dropped": False}})
     assert [p for p, _ in swapped] == [1, 2]
-    dropped = effective_picks(ROWS, {2: {"pick": None, "dropped": True}})
+    dropped = effective_picks(
+        ROWS, {"y135_00002.jpg": {"pick": None, "dropped": True}})
     assert [p for p, _ in dropped] == [0]
+
+
+def test_effective_picks_survive_a_renumbered_manifest():
+    """The point of keying on names: shift every row and the swap holds."""
+    shifted = [dict(r, pano_idx=str(int(r["pano_idx"]) + 1)) for r in ROWS[::-1]]
+    state = {"y045_00000.jpg": {"pick": "y045_00001.jpg", "dropped": False}}
+    picks = effective_picks(shifted, state)
+    assert [r["path"] for _, r in picks] == ["y135_00002.jpg", "y045_00001.jpg"]
 
 
 def jpg_bytes() -> bytes:

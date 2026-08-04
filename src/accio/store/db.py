@@ -27,12 +27,12 @@ CREATE TABLE IF NOT EXISTS walks (
 CREATE TABLE IF NOT EXISTS decisions (
     id INTEGER PRIMARY KEY,
     walk_id TEXT NOT NULL,
-    anchor_idx INTEGER NOT NULL,     -- the group's auto-pick (manifest face idx)
+    anchor TEXT NOT NULL,            -- the group's anchor, by face file name
     action TEXT NOT NULL CHECK (action IN ('pick', 'drop', 'restore')),
-    pick_idx INTEGER,                -- for 'pick': the member now chosen
+    pick TEXT,                       -- for 'pick': the member now chosen
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS ix_decisions_walk ON decisions (walk_id, anchor_idx, id);
+CREATE INDEX IF NOT EXISTS ix_decisions_anchor ON decisions (walk_id, anchor, id);
 """
 
 
@@ -40,8 +40,24 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
+    _retire_index_decisions(conn)
     conn.executescript(SCHEMA)
     return conn
+
+
+def _retire_index_decisions(conn: sqlite3.Connection) -> None:
+    """Drop a pre-face-name decisions table so the new one can be made.
+
+    Decisions used to key on the manifest row number, which only means
+    anything while the manifest never changes. Re-running a stage renumbers
+    the rows, so a stored index would silently point at a different frame.
+    Those rows are review clicks on walks that predate this, not worth
+    translating; deleting them restores the auto-picks.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)")}
+    if "anchor_idx" in cols:
+        conn.execute("DROP TABLE decisions")
+        conn.commit()
 
 
 WALK_FIELDS = ("site", "building", "stage", "operator", "mount_height_cm",
@@ -76,29 +92,31 @@ def walk_meta(conn: sqlite3.Connection, walk_id: str) -> dict | None:
     return dict(zip(cols, row))
 
 
-def log_decision(conn: sqlite3.Connection, walk_id: str, anchor_idx: int,
-                 action: str, pick_idx: int | None = None) -> None:
+def log_decision(conn: sqlite3.Connection, walk_id: str, anchor: str,
+                 action: str, pick: str | None = None) -> None:
+    """Anchor and pick are face file names, so a decision keeps meaning the
+    same frame after a stage re-runs and renumbers the manifest."""
     conn.execute(
-        "INSERT INTO decisions (walk_id, anchor_idx, action, pick_idx) "
+        "INSERT INTO decisions (walk_id, anchor, action, pick) "
         "VALUES (?, ?, ?, ?)",
-        (walk_id, anchor_idx, action, pick_idx))
+        (walk_id, anchor, action, pick))
     conn.commit()
 
 
-def effective_state(conn: sqlite3.Connection, walk_id: str) -> dict[int, dict]:
-    """Latest decision per group: {anchor_idx: {pick, dropped}}.
+def effective_state(conn: sqlite3.Connection, walk_id: str) -> dict[str, dict]:
+    """Latest decision per group: {anchor face name: {pick, dropped}}.
 
     Replays the log in order, so state is always derivable and the full
     history stays queryable for override-pattern analysis.
     """
-    state: dict[int, dict] = {}
+    state: dict[str, dict] = {}
     rows = conn.execute(
-        "SELECT anchor_idx, action, pick_idx FROM decisions "
+        "SELECT anchor, action, pick FROM decisions "
         "WHERE walk_id = ? ORDER BY id", (walk_id,))
-    for anchor_idx, action, pick_idx in rows:
-        s = state.setdefault(anchor_idx, {"pick": None, "dropped": False})
+    for anchor, action, pick in rows:
+        s = state.setdefault(anchor, {"pick": None, "dropped": False})
         if action == "pick":
-            s["pick"] = pick_idx
+            s["pick"] = pick
             s["dropped"] = False
         elif action == "drop":
             s["dropped"] = True
@@ -109,11 +127,11 @@ def effective_state(conn: sqlite3.Connection, walk_id: str) -> dict[int, dict]:
 
 def override_log(conn: sqlite3.Connection, walk_id: str | None = None) -> list[dict]:
     """Full decision history, for the override-pattern review."""
-    q = ("SELECT walk_id, anchor_idx, action, pick_idx, created_at "
+    q = ("SELECT walk_id, anchor, action, pick, created_at "
          "FROM decisions")
     args: tuple = ()
     if walk_id is not None:
         q += " WHERE walk_id = ?"
         args = (walk_id,)
-    cols = ["walkId", "anchorIdx", "action", "pickIdx", "createdAt"]
+    cols = ["walkId", "anchor", "action", "pick", "createdAt"]
     return [dict(zip(cols, r)) for r in conn.execute(q + " ORDER BY id", args)]
