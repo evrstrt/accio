@@ -483,12 +483,14 @@ button {
 
 /* --- ingest form -------------------------------------------------------- */
 
+/* Settled chrome, not a modal: it is what the canvas holds until you fill
+   it, so 4 px like every other panel, on the flat shadow. */
 .ingest {
   max-width: 512px;
   padding: 20px 16px 16px;
   background: #fff;
   border: 1px solid var(--z-border);
-  border-radius: 8px;
+  border-radius: 4px;
   box-shadow: var(--z-shadow);
 }
 
