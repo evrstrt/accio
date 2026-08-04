@@ -27,8 +27,8 @@ function modelLabel(name: string): string {
 
 const BLOCKS: Block[] = [
   {
-    id: 'walk',
-    title: 'Walk',
+    id: 'video',
+    title: 'Video',
     sub: (w) => [w.meta?.site, w.meta?.building].filter(Boolean).join(' · ')
       || 'dual-fisheye .insv',
     stat: (w) => w.meta?.shotDate || 'no date',
@@ -68,12 +68,6 @@ const BLOCKS: Block[] = [
     title: 'Review',
     sub: (w) => (w.stages.dropped ? `${w.stages.dropped} dropped` : 'no overrides'),
     stat: (w) => `${w.stages.kept} kept`,
-  },
-  {
-    id: 'export',
-    title: 'Export',
-    sub: () => 'zip · EXIF stamped',
-    stat: (w) => `${w.stages.kept} frames`,
   },
 ]
 
