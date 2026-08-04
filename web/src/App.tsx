@@ -343,7 +343,6 @@ export default function App() {
         {!error && !ingesting && walk && (
           <>
             <header className="walk-header">
-              <h1 className="walk-title">{walk.id}</h1>
               <MetaLine walk={walk} />
               <Funnel walk={walk} />
             </header>
