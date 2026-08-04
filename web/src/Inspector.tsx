@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { Pending, WalkDetail } from './api'
+import type { Calibration, Pending, WalkDetail } from './api'
 
 // Per-stage panels. The controls are mock: uncontrolled inputs with no
 // handlers, so they move but change nothing. What each stage exposes here is
@@ -50,12 +50,15 @@ function Out({ children }: { children: ReactNode }) {
   return <div className="insp-out">{children}</div>
 }
 
-export default function Inspector({ stage, walk, pending, onEdit, onOpenReview }: {
+export default function Inspector({ stage, walk, pending, calib, onEdit,
+                                   onOpenReview, onShowCalibration }: {
   stage: string
   walk: WalkDetail
   pending: Pending
+  calib: Calibration | null
   onEdit: (p: Pending) => void
   onOpenReview: () => void
+  onShowCalibration: () => void
 }) {
   const { stages: s, pipeline: p, meta } = walk
 
@@ -165,12 +168,12 @@ export default function Inspector({ stage, walk, pending, onEdit, onOpenReview }
               className="insp-control"
               value={pending.rule ?? p.dedup.rule}
               onChange={(e) => {
-                const rule = e.target.value as 'fixed' | 'auto'
+                const rule = e.target.value as 'fixed' | 'calibrated'
                 onEdit(rule === p.dedup.rule ? {} : { rule })
               }}
             >
               <option value="fixed">fixed</option>
-              <option value="auto">per video (auto)</option>
+              <option value="calibrated">calibrated</option>
             </select>
           </Row>
         </Group>
@@ -183,7 +186,7 @@ export default function Inspector({ stage, walk, pending, onEdit, onOpenReview }
               className="insp-control num"
               type="number" step={0.005} min={0.5} max={0.999}
               value={pending.tau ?? p.dedup.tau}
-              disabled={(pending.rule ?? p.dedup.rule) === 'auto'}
+              disabled={(pending.rule ?? p.dedup.rule) === 'calibrated'}
               onChange={(e) => {
                 const v = Number(e.target.value)
                 onEdit(Number.isFinite(v) && v !== p.dedup.tau ? { tau: v } : {})
@@ -192,6 +195,21 @@ export default function Inspector({ stage, walk, pending, onEdit, onOpenReview }
           </Row>
           <Row label="Scope"><Select value="per walk" options={['per walk', 'across walks']} /></Row>
         </Group>
+        {calib && (
+          <Group title="calibration">
+            <Row label="Identical scores">
+              <Val>{calib.reference.median} median · {calib.reference.n} pairs</Val>
+            </Row>
+            <Row label="Calibrated τ"><Val>{calib.tau}</Val></Row>
+            {!calib.healthy && (
+              <div className="insp-warn">Reference is low; this walk may be
+                mis-stitched or under-exposed.</div>
+            )}
+            <button className="insp-btn" onClick={onShowCalibration}>
+              How τ was measured
+            </button>
+          </Group>
+        )}
         <Out>{s.absorbed} absorbed, {s.anchors} anchors</Out>
       </>
     )

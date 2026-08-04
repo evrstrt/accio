@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchJobs, fetchWalk, fetchWalks, postDecision, postRerun } from './api'
-import type { Decision, Face, Group, Job, Pending, WalkDetail, WalkSummary } from './api'
+import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
+         postRerun } from './api'
+import type { Calibration, Decision, Face, Group, Job, Pending, WalkDetail,
+              WalkSummary } from './api'
+import CalibrationModal from './Calibration'
 import Ingest from './Ingest'
 import Inspector from './Inspector'
 import Pipeline, { rerunLabel } from './Pipeline'
@@ -236,6 +239,8 @@ export default function App() {
   // they would re-run and nothing happens until Apply
   const [pending, setPending] = useState<Pending>({})
   const [applying, setApplying] = useState(false)
+  const [calib, setCalib] = useState<Calibration | null>(null)
+  const [showCalib, setShowCalib] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const exportUrl = selected
@@ -267,7 +272,11 @@ export default function App() {
     setPending({})
     // a queued or running walk has no manifest yet: the canvas runs off the
     // job until it lands, so a 404 here is expected rather than an error
+    setCalib(null)
+    setShowCalib(false)
     fetchWalk(selected).then(setWalk).catch(() => setWalk(null))
+    // measured on every run, so only walks made before it exists lack a record
+    fetchCalibration(selected).then(setCalib).catch(() => setCalib(null))
   }, [selected])
 
   // Poll jobs always, fast while something is in flight and slowly otherwise:
@@ -297,6 +306,7 @@ export default function App() {
     postRerun(selected, pending)
       .then(() => Promise.all([fetchWalk(selected), fetchWalks()]))
       .then(([w, ws]) => { setWalk(w); setWalks(ws); setPending({}) })
+      .then(() => fetchCalibration(selected).then(setCalib).catch(() => {}))
       .catch((e) => setError(String(e)))
       .finally(() => setApplying(false))
   }, [selected, pending])
@@ -452,12 +462,17 @@ export default function App() {
             </button>
           </div>
           <div className="insp-body">
-            <Inspector stage={inspect} walk={walk} pending={pending}
-                       onEdit={setPending} onOpenReview={() => setView('review')} />
+            <Inspector stage={inspect} walk={walk} pending={pending} calib={calib}
+                       onEdit={setPending} onOpenReview={() => setView('review')}
+                       onShowCalibration={() => setShowCalib(true)} />
           </div>
         </aside>
       )}
       </div>
+      {showCalib && calib && selected && (
+        <CalibrationModal walkId={selected} calib={calib}
+                          onClose={() => setShowCalib(false)} />
+      )}
     </div>
   )
 }

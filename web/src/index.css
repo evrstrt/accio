@@ -411,6 +411,108 @@ select.insp-control { cursor: pointer; }
 .insp-btn:hover { background: #fff; }
 .insp-btn:active { transform: translateY(1px) scale(0.99); box-shadow: none; }
 
+/* --- calibration modal: Zed's dialog, with the evidence in it ----------- */
+
+.z-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.z-scrim.open { opacity: 1; }
+
+.z-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 31;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  padding: 20px 16px 16px;
+  background: #fff;
+  border: 1px solid var(--z-border);
+  border-radius: 8px;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1),
+              0 4px 6px -4px rgba(0, 0, 0, 0.1);
+}
+
+.calib-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.calib-head h2 { margin: 0; font: 16px/1 var(--z-sans); font-weight: 400; color: #000; }
+
+.calib-note { margin: 0; font-size: 13px; line-height: 1.5; color: var(--z-muted); }
+.calib-note em { color: var(--z-text); font-style: italic; }
+
+.calib-stats {
+  display: flex;
+  gap: 20px;
+  padding: 8px 10px;
+  border: 1px solid var(--z-border);
+  border-radius: 4px;
+  background: var(--z-surface);
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.calib-n { color: var(--z-text); }
+.calib-tau { margin-left: auto; }
+.calib-tau .calib-n { color: var(--z-blue); }
+
+.calib-warn {
+  padding: 8px 10px;
+  border: 1px solid rgba(228, 0, 20, 0.35);
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--z-red);
+}
+
+.calib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.calib-imgs { display: flex; gap: 2px; }
+
+.calib-imgs img {
+  width: 50%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border: 1px solid var(--z-border);
+  border-radius: 4px;
+}
+
+.calib-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* the pairs at or under tau are the ones that set it */
+.calib-low { color: var(--z-blue); }
+
+.insp-warn { font-size: 12px; line-height: 1.5; color: var(--z-red); }
+
 /* --- pipeline canvas ---------------------------------------------------- */
 
 .canvas { position: relative; width: 100%; margin-top: 4px; }

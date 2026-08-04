@@ -205,7 +205,7 @@ def pipeline_spec(walk_id: str) -> dict:
 
 class Rerun(BaseModel):
     tau: float | None = None
-    rule: str | None = None      # 'fixed' | 'auto'
+    rule: str | None = None      # 'fixed' | 'calibrated'
 
 
 @app.post("/api/walks/{walk_id}/rerun")
@@ -215,7 +215,7 @@ def rerun(walk_id: str, r: Rerun) -> dict:
     out = walk_dir(walk_id)
     params = walk_params(walk_id)
     if r.rule is not None:
-        if r.rule not in ("fixed", "auto"):
+        if r.rule not in ("fixed", "calibrated"):
             raise HTTPException(422, f"unknown threshold rule {r.rule!r}")
         params = replace(params, dedup=replace(params.dedup, rule=r.rule))
     if r.tau is not None:
@@ -256,6 +256,23 @@ def post_decision(walk_id: str, d: Decision) -> dict:
 def overrides(walk_id: str) -> list[dict]:
     walk_dir(walk_id)
     return db.override_log(conn(), walk_id)
+
+
+@app.get("/api/walks/{walk_id}/calibration")
+def calibration(walk_id: str) -> dict:
+    """How this walk's identical-content reference was measured."""
+    path = walk_dir(walk_id) / "calibration.json"
+    if not path.exists():
+        raise HTTPException(404, "this walk predates calibration; re-ingest it")
+    return json.loads(path.read_text())
+
+
+@app.get("/api/walks/{walk_id}/calib/{name}")
+def calib_image(walk_id: str, name: str) -> FileResponse:
+    path = (walk_dir(walk_id) / "calib" / name).resolve()
+    if not path.is_relative_to(WALKS_ROOT) or not path.exists():
+        raise HTTPException(404, "no such calibration face")
+    return FileResponse(path)
 
 
 @app.get("/api/walks/{walk_id}/export")

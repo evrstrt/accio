@@ -98,11 +98,33 @@ export const postDecision = (walkId: string, d: Decision) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(d),
   })
+// how a walk's identical-content reference was measured
+export type CalibPair = {
+  pano: number
+  yaw: number
+  tSec: number
+  face: string
+  neighbour: string
+  cosine: number
+}
+
+export type Calibration = {
+  tau: number
+  quantile: number
+  pairs: CalibPair[]
+  reference: { median: number; p05: number; min: number; n: number }
+  healthy: boolean
+  gapSeconds: number
+}
+
+export const fetchCalibration = (walkId: string) =>
+  req<Calibration>(`/api/walks/${encodeURIComponent(walkId)}/calibration`)
+
 export const fetchJobs = () => req<Job[]>('/api/jobs')
 
 // staged settings, applied to an existing walk (Select re-runs from the
 // cached embeddings, so this returns in seconds)
-export type Pending = { tau?: number; rule?: 'fixed' | 'auto' }
+export type Pending = { tau?: number; rule?: 'fixed' | 'calibrated' }
 
 export const postRerun = (walkId: string, p: Pending) =>
   req<{ faces: number; anchors: number; absorbed: number }>(

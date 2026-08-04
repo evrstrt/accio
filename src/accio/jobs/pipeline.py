@@ -16,7 +16,8 @@ import cv2
 import numpy as np
 
 from ..core import blur, extract, faces
-from ..core.dedup import greedy_dedup, resolve as resolve_dedup
+from ..core.calibrate import calibrate
+from ..core.dedup import greedy_dedup
 from ..core.embed import Embedder
 from ..core.params import PipelineParams
 
@@ -81,10 +82,14 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
     say("embed", "done")
 
     say("select", "running")
-    # an "auto" rule becomes a number here, before anything records it
-    params = replace(params, dedup=resolve_dedup(
-        embeddings, params.dedup, [p.index for p, _, _ in records],
-        [yaw for _, yaw, _ in records]))
+    # what "identical" scores on this walk, measured every run: the threshold
+    # only uses it under the calibrated rule, but a low reference is a warning
+    # worth having either way
+    face_rows = [(p.index, p.t_sec, yaw, path.name) for p, yaw, path in records]
+    calib = calibrate(video, out, face_rows, embeddings, params, embedder,
+                      native_fps)
+    (out / "calibration.json").write_text(json.dumps(calib, indent=1))
+    params = apply_rule(params, calib)
     result = greedy_dedup(embeddings, params.dedup)
     write_manifest(out / "manifest.csv",
                    [(p.index, p.t_sec, yaw, path.name) for p, yaw, path in records],
@@ -95,6 +100,14 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
 
     return dict(walk=walk, panos=len(panos), sharp=len(sharp),
                 faces=len(records), kept=kept)
+
+
+def apply_rule(params: PipelineParams, calib: dict | None) -> PipelineParams:
+    """Under the calibrated rule the threshold comes from the measurement, so
+    tau always holds the number that actually ran."""
+    if params.dedup.rule != "calibrated" or not calib:
+        return params
+    return replace(params, dedup=replace(params.dedup, tau=calib["tau"]))
 
 
 def write_manifest(path: Path, faces_out: list[tuple[int, float, int, str]],
@@ -139,9 +152,9 @@ def reselect(walk_out: Path, params: PipelineParams) -> dict:
         raise ValueError(f"manifest has {len(rows)} rows but "
                          f"{len(embeddings)} embeddings")
 
-    params = replace(params, dedup=resolve_dedup(
-        embeddings, params.dedup, [int(r["pano_idx"]) for r in rows],
-        [int(r["yaw"]) for r in rows]))
+    calib_file = walk_out / "calibration.json"
+    calib = json.loads(calib_file.read_text()) if calib_file.exists() else None
+    params = apply_rule(params, calib)
     result = greedy_dedup(embeddings, params.dedup)
     write_manifest(walk_out / "manifest.csv",
                    [(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]), r["path"])
