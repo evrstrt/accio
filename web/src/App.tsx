@@ -272,25 +272,10 @@ export default function App() {
   return (
     <div className="frame">
       <header className="topbar">
-        <div className="tabs">
-          <button
-            className={`tab${!ingesting ? ' active' : ''}`}
-            onClick={() => setIngesting(false)}
-          >
-            Review
-          </button>
-          <button
-            className={`tab${ingesting ? ' active' : ''}`}
-            onClick={() => setIngesting(true)}
-          >
-            New Walk
-          </button>
-          <div className="z-divider" />
-          <div className="crumb">
-            <span className="crumb-dim">accio</span>
-            <span className="sep">/</span>
-            <b>{ingesting ? 'new walk' : selected ?? 'no walk'}</b>
-          </div>
+        <div className="crumb">
+          <span className="crumb-dim">accio</span>
+          <span className="sep">/</span>
+          <b>{ingesting ? 'new walk' : selected ?? 'no walk'}</b>
         </div>
         <div className="top-actions">
           {!ingesting && selected && walk && (
@@ -307,7 +292,19 @@ export default function App() {
       <div className="app">
       <nav className="rail">
         <div className="rail-label">
-          Walks <span className="rail-count">{walks?.length ?? 0}</span>
+          <span>Walks</span>
+          <span className="rail-count">{walks?.length ?? 0}</span>
+          <button
+            className={`icon-btn${ingesting ? ' active' : ''}`}
+            onClick={() => setIngesting(true)}
+            title="new walk"
+            aria-label="new walk"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
         </div>
         {jobs.filter((j) => j.status !== 'done').map((j) => <JobItem key={j.id} job={j} />)}
         {walks?.map((w) => (

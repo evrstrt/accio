@@ -68,15 +68,16 @@ button {
   border-bottom: 1px solid rgba(206, 209, 214, 0.6);
 }
 
-.tabs { display: flex; align-items: center; gap: 2px; }
-
-/* Zed's text button: h-6 px-1.5, transparent until hover, blue-soft when on */
-.tab, .top-btn {
+/* Zed's buttons: 24 px, transparent until hover, blue-soft when active.
+   .top-btn is the same control with an auto width (their Import / Export). */
+.icon-btn, .top-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  width: 24px;
   height: 24px;
-  padding: 0 6px;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
@@ -86,19 +87,21 @@ button {
               transform 0.05s;
 }
 
-.tab:hover:not(.active), .top-btn:hover {
+.top-btn { width: auto; padding: 0 6px; }
+
+.icon-btn:hover:not(.active), .top-btn:hover:not(.active) {
   background: rgba(0, 0, 0, 0.05);
 }
 
-.tab:active, .top-btn:active { transform: translateY(1px) scale(0.99); }
+.icon-btn:active, .top-btn:active { transform: translateY(1px) scale(0.99); }
 
-.tab.active {
+.icon-btn.active, .top-btn.active {
   background: var(--z-blue-soft);
   color: var(--z-blue);
   border-color: var(--z-blue-border);
 }
 
-.tab:focus-visible, .top-btn:focus-visible, .walk-item:focus-visible {
+.icon-btn:focus-visible, .top-btn:focus-visible, .walk-item:focus-visible {
   outline: 2px solid var(--z-blue-border);
   outline-offset: 1px;
 }
@@ -147,15 +150,20 @@ button {
 .rail-label {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   height: 40px;
-  padding: 0 12px;
+  padding: 0 8px 0 12px;
   font-weight: 500;
   border-bottom: 1px solid var(--z-border);
   user-select: none;
 }
 
-.rail-count { color: var(--z-muted); font-weight: 400; }
+.rail-count {
+  flex: 1;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--z-muted);
+}
 
 .walk-item {
   display: flex;
