@@ -288,13 +288,15 @@ export default function App() {
           >
             New Walk
           </button>
+          <div className="z-divider" />
+          <div className="crumb">
+            <span className="crumb-dim">accio</span>
+            <span className="sep">/</span>
+            <b>{ingesting ? 'new walk' : selected ?? 'no walk'}</b>
+          </div>
         </div>
-        <div className="crumb">
-          accio <span className="sep">/</span>{' '}
-          <b>{ingesting ? 'new walk' : selected ?? 'no walk'}</b>
-        </div>
-        {!ingesting && selected && walk && (
-          <div className="top-actions">
+        <div className="top-actions">
+          {!ingesting && selected && walk && (
             <a
               className="top-btn"
               href={`/api/walks/${encodeURIComponent(selected)}/export`}
@@ -302,12 +304,14 @@ export default function App() {
             >
               Export
             </a>
-          </div>
-        )}
+          )}
+        </div>
       </header>
       <div className="app">
       <nav className="rail">
-        <div className="rail-label">Walks</div>
+        <div className="rail-label">
+          Walks <span className="rail-count">{walks?.length ?? 0}</span>
+        </div>
         {jobs.filter((j) => j.status !== 'done').map((j) => <JobItem key={j.id} job={j} />)}
         {walks?.map((w) => (
           <button
@@ -323,6 +327,16 @@ export default function App() {
         ))}
       </nav>
       <main className="main">
+        {/* Zed's dotted backdrop, their markup rather than a CSS gradient:
+            an 8 px pattern with an r=0.75 circle in blue-300 at 60%. */}
+        <svg className="dots">
+          <defs>
+            <pattern id="dot" width="8" height="8" patternUnits="userSpaceOnUse">
+              <circle cx="4" cy="4" r="0.75" fill="currentColor" />
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#dot)" />
+        </svg>
         {error && <div className="error">{error}</div>}
         {!error && ingesting && (
           <Ingest

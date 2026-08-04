@@ -1,344 +1,278 @@
-/* accio, styled exactly on zed.dev's theme-builder app (light): full-bleed
-   h-screen layout, 57px cream-50 toolbar, #dadde2 hairline dividers, and a
-   canvas (cream-100/10 + 8px blue dot grid) the content floats on, over
-   warm paper with a 3% noise grain. Offgray text with black for high
-   contrast, accent blue #1348dc, focus ring #094ece80. Type: iA Writer
-   Quattro (body), Lilex (mono, all numerals), IBM Plex Serif (headings),
-   the fonts Zed ships, self-hosted. */
-
-@font-face {
-  font-family: writer;
-  src: url(/fonts/writer-regular.woff2) format("woff2");
-  font-weight: 400;
-  font-display: swap;
-}
-@font-face {
-  font-family: writer;
-  src: url(/fonts/writer-bold.woff2) format("woff2");
-  font-weight: 700;
-  font-display: swap;
-}
-@font-face {
-  font-family: zedMono;
-  src: url(/fonts/lilex-regular.woff2) format("woff2");
-  font-weight: 400;
-  font-display: swap;
-}
+/* Zed-style chrome, the same theme as the ciq-demo free-roam viewer so the
+   tools read as one product: flat light panels on the #f1f0ee surface,
+   hairline #dadde2 borders, 4 px radii, -0.35px tracking, IBM Plex Sans with
+   ui-monospace for small values, subtle hover wash, press-down micro
+   animation, accent blue hsl(219 93% 35%). The frames themselves are
+   content, not chrome: they keep their own colours. */
 
 :root {
-  --cream-50: #f5f4f3;
-  --cream-100: #d1cfc8;
-  --offgray-50: #e3e4e7;
-  --offgray-100: #ced1d6;
-  --offgray-200: #c0c3ca;
-  --offgray-400: #878e9b;
-  --offgray-500: #727a89;
-  --offgray-700: #535964;
-  --accent-blue: #1348dc;
-  --border: #dadde2;
-  --focus-ring: #094ece80;
-  --green: #00a544;   /* zed green-600 */
-  --red: #e40014;     /* zed red-600 */
-  --amber: #f99c00;   /* zed amber-500 */
-  --black: #000;
-  --white: #fff;
-  --mono: zedMono, ui-monospace, monospace;
-  --sans: writer, ui-sans-serif, system-ui, sans-serif;
+  --z-border: #dadde2;
+  --z-bg: #fcfcfd;
+  --z-surface: #f1f0ee;
+  --z-text: oklch(0.358979 0.0154914 262.882);
+  --z-icon: #3f4650;
+  --z-muted: #6e7681;
+  --z-blue: hsl(219, 93%, 35%);
+  --z-blue-soft: hsl(219, 93%, 95%);
+  --z-blue-border: hsl(219, 93%, 35%, 0.35);
+  --z-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --z-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --z-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --z-shadow-pop: 0 6px 24px rgba(0, 0, 0, 0.12);
+  --z-green: #00a544;
+  --z-red: #e40014;
+  --z-amber: #f99c00;
+  --topbar-h: 40px;
+  --side-w: 299px;
 }
 
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
-  background: color-mix(in srgb, var(--cream-100) 20%, var(--white));
-  color: var(--offgray-500);
-  font-family: var(--sans);
-  font-size: 14px;
-  /* zed's app UI runs writer at NORMAL tracking; tracking-tight is buttons only */
+  background: var(--z-surface);
+  color: var(--z-text);
+  font: 14px/1.43 var(--z-sans);
+  letter-spacing: -0.35px;
   -webkit-font-smoothing: antialiased;
-}
-
-/* the 3% noise grain zed lays over the paper */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background: url(/noise.webp) repeat;
-  background-size: 180px;
-  opacity: 0.03;
 }
 
 #root { min-height: 100vh; }
 
-::selection { background: color-mix(in srgb, var(--accent-blue) 20%, transparent); }
+::selection { background: var(--z-blue-soft); }
 
-/* zed button base: writer text-sm tracking-tight, instant press-down */
 button {
-  font-family: var(--sans);
-  letter-spacing: -0.025em;
+  font: inherit;
+  letter-spacing: inherit;
   cursor: pointer;
 }
 
-button:active:not(:disabled) { transform: translateY(1px) scale(0.99); }
+/* --- frame -------------------------------------------------------------- */
 
-button:focus { outline: none; }
-button:focus-visible, .field:focus-visible {
-  outline: 3px solid var(--focus-ring);
-  outline-offset: 2px;
-}
+.frame { min-height: 100vh; }
 
-/* ---- zed app frame: full-bleed h-screen column, 57px toolbar ---- */
-
-.frame {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
+/* Zed's page chrome: a full-width strip flush with the top edge, context on
+   the left, actions on the right, one hairline along the bottom. */
 .topbar {
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 20;
-  height: 57px;
-  flex-shrink: 0;
   display: flex;
-  align-items: stretch;
-  background: var(--cream-50); /* zed nav-background */
-  border-bottom: 1px solid var(--border);
+  align-items: center;
+  justify-content: space-between;
+  height: var(--topbar-h);
+  padding: 0 8px;
+  background: #fff;
+  border-bottom: 1px solid rgba(206, 209, 214, 0.6);
 }
 
-/* zed toolbar tab group: white, divide-x hairlines, h-px underline that
-   turns accent-blue on the active tab */
-.tabs {
+.tabs { display: flex; align-items: center; gap: 2px; }
+
+/* Zed's text button: h-6 px-1.5, transparent until hover, blue-soft when on */
+.tab, .top-btn {
   display: flex;
-  align-items: stretch;
-  background: var(--white);
-  border-right: 1px solid var(--border);
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--z-icon);
+  text-decoration: none;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s,
+              transform 0.05s;
 }
 
-.tab {
-  position: relative;
-  padding: 0 16px;
-  font-size: 14px;
-  color: var(--black);
-  background: none;
-  border: none;
-  border-right: 1px solid var(--border);
-  transition: background 120ms;
+.tab:hover:not(.active), .top-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
 }
 
-.tab:last-child { border-right: none; }
-.tab:hover { background: color-mix(in srgb, var(--offgray-100) 40%, transparent); }
+.tab:active, .top-btn:active { transform: translateY(1px) scale(0.99); }
 
-.tab::after {
-  content: "";
-  position: absolute;
-  left: 0; right: 0; bottom: -1px;
-  height: 1px;
-  background: color-mix(in srgb, var(--offgray-100) 60%, transparent);
+.tab.active {
+  background: var(--z-blue-soft);
+  color: var(--z-blue);
+  border-color: var(--z-blue-border);
 }
 
-.tab.active::after { background: var(--accent-blue); }
-.tab:active:not(:disabled) { transform: none; } /* tabs don't press-down */
+.tab:focus-visible, .top-btn:focus-visible, .walk-item:focus-visible {
+  outline: 2px solid var(--z-blue-border);
+  outline-offset: 1px;
+}
 
-/* zed breadcrumb: "New Theme / One Light" */
+/* Zed's `New Theme / One Light`: context dimmed, value at full contrast */
 .crumb {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 16px;
-  font-size: 14px;
-  color: var(--offgray-500);
+  padding: 0 8px;
+  color: var(--z-text);
   user-select: none;
 }
 
-.crumb b { color: var(--black); font-weight: 400; }
-.crumb .sep { color: var(--offgray-200); }
+.crumb .sep, .crumb-dim { opacity: 0.6; }
+.crumb b { color: #000; font-weight: 400; }
 
-/* toolbar right side: quiet zed text buttons (Import / Export) */
-.top-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 12px;
+.top-actions { display: flex; align-items: center; gap: 2px; }
+
+.z-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 8px;
+  background: rgba(218, 221, 226, 0.6);
 }
 
-.top-btn {
-  display: inline-flex;
-  align-items: center;
-  height: 24px;
-  padding: 0 8px;
-  font-size: 14px;
-  letter-spacing: -0.025em;
-  color: var(--black);
-  text-decoration: none;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  transition: border-color 120ms, background 120ms;
-}
+/* --- sidebar ------------------------------------------------------------ */
 
-.top-btn:hover {
-  background: color-mix(in srgb, var(--offgray-100) 40%, transparent);
-  border-color: var(--border);
-}
-
-.top-btn:active { transform: translateY(1px) scale(0.99); }
-
-.top-btn:focus-visible {
-  outline: 3px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.app {
-  display: grid;
-  grid-template-columns: 240px 1fr;
-  flex: 1;
-}
-
-/* ---- left rail: zed sidebar, h-10 rows on white ---- */
+.app { min-height: 100vh; }
 
 .rail {
-  border-right: 1px solid var(--border);
-  background: var(--white);
-  position: sticky;
-  top: 57px;
-  height: calc(100vh - 57px);
+  position: fixed;
+  left: 0;
+  top: var(--topbar-h);
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: var(--side-w);
+  border-right: 1px solid var(--z-border);
+  background: var(--z-bg);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .rail-label {
   display: flex;
   align-items: center;
-  height: 44px;
+  justify-content: space-between;
+  height: 40px;
   padding: 0 12px;
-  font-size: 15px;
-  color: var(--black);
-  border-bottom: 1px solid var(--border);
+  font-weight: 500;
+  border-bottom: 1px solid var(--z-border);
   user-select: none;
 }
 
-/* zed sidebar rows: borderless, hover wash only */
+.rail-count { color: var(--z-muted); font-weight: 400; }
+
 .walk-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   width: 100%;
-  height: 40px;
-  text-align: left;
-  background: none;
-  border: none;
+  height: 32px;
   padding: 0 12px;
-  color: var(--offgray-700);
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
   font-size: 13px;
-  transition: background 120ms, color 120ms;
+  transition: background-color 0.12s, color 0.12s;
 }
 
-.walk-item:active:not(:disabled) { transform: none; }
-
-.walk-item:hover {
-  background: color-mix(in srgb, var(--offgray-100) 40%, transparent);
-  color: var(--black);
-}
-
-.walk-item.active {
-  background: color-mix(in srgb, #dbeafe 60%, transparent); /* zed blue-100 */
-  color: var(--black);
-}
+.walk-item:hover { background: rgba(0, 0, 0, 0.04); }
+.walk-item.active { background: var(--z-blue-soft); color: var(--z-blue); }
 
 .walk-item .walk-id {
+  flex: 1;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .walk-item .walk-stats {
-  flex-shrink: 0;
-  font-family: var(--mono);
-  font-size: 11px;
+  flex: none;
+  font: 11px/1.6 var(--z-mono);
   letter-spacing: 0;
-  color: var(--offgray-400);
+  color: var(--z-muted);
+  font-variant-numeric: tabular-nums;
 }
 
-.kept-n { color: var(--green); }
+.walk-item.active .walk-stats { color: var(--z-blue); }
+.kept-n { color: var(--z-green); }
+.walk-item.active .kept-n { color: inherit; }
 
-/* ---- main column: zed's canvas, cream-100/10 with the 8px blue dot
-   grid (blue-300 at 60%, r=0.75) the theme preview floats on ---- */
+/* --- canvas ------------------------------------------------------------- */
 
+/* The work area: Zed's dotted backdrop, drawn with their own SVG pattern
+   (8 px pitch, r=0.75 circle in blue-300 at 60%). A radial-gradient with a
+   hard stop antialiases differently, and at 1.5 px across that is most of
+   the dot. */
 .main {
-  padding: 0 28px 80px;
-  min-width: 0;
-  background-color: color-mix(in srgb, var(--cream-100) 10%, transparent);
-  background-image: radial-gradient(circle,
-    rgba(144, 197, 255, 0.6) 0.75px, transparent 0.85px);
-  background-size: 8px 8px;
+  position: relative;
+  isolation: isolate;   /* so the z-index -1 dots land above this background */
+  min-height: 100vh;
+  margin-left: var(--side-w);
+  padding: calc(var(--topbar-h) + 8px) 16px 80px;
+  background: var(--z-surface);
 }
 
-/* app chrome bar, not a hero: nav-background, hairline, plain black title */
+.dots {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+  color: #8ec5ff;
+  opacity: 0.6;
+}
+
+/* --- walk header -------------------------------------------------------- */
+
 .walk-header {
-  position: sticky;
-  top: 57px;
-  z-index: 10;
-  margin: 0 -28px 22px;
-  padding: 12px 28px 10px;
-  background: var(--cream-50);
-  border-bottom: 1px solid var(--border);
-}
-
-.walk-title {
-  font-size: 15px;
-  font-weight: 400;
-  color: var(--black);
-  margin: 0 0 6px;
-}
-
-/* the funnel: the pipeline story in one monospace line */
-.funnel {
-  font-family: var(--mono);
-  font-size: 12px;
-  letter-spacing: 0;
-  color: var(--offgray-500);
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
+  margin-bottom: 12px;
 }
 
-.funnel .n { color: var(--black); }
-.funnel .n.kept-n { color: var(--green); }
-.funnel .n.drop-n { color: var(--red); }
-.funnel .arrow { color: var(--offgray-400); }
-.funnel .label { font-size: 11px; color: var(--offgray-400); }
+.walk-title { margin: 0; font-size: 14px; font-weight: 500; color: #000; }
 
-/* ---- kept grid ---- */
+.meta-line, .funnel {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.funnel .n { color: var(--z-text); }
+.funnel .n.kept-n { color: var(--z-green); }
+.funnel .n.drop-n { color: var(--z-red); }
+.funnel .arrow, .funnel .label { color: var(--z-muted); }
 
 .section-title {
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--offgray-400);
-  margin: 26px 0 12px;
+  margin: 0 0 10px;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
 }
+
+/* --- tiles -------------------------------------------------------------- */
 
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .tile {
   position: relative;
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  overflow: hidden;
-  cursor: pointer;
   padding: 0;
-  transition: border-color 120ms, transform 120ms;
+  overflow: hidden;
+  background: var(--z-bg);
+  border: 1px solid var(--z-border);
+  border-radius: 4px;
+  box-shadow: var(--z-shadow);
+  transition: border-color 0.12s, box-shadow 0.12s, transform 0.05s;
   animation: tile-in 300ms both;
 }
 
@@ -354,17 +288,19 @@ button:focus-visible, .field:focus-visible {
   object-fit: cover;
 }
 
-.tile.kept { border-color: color-mix(in srgb, var(--green) 50%, var(--border)); }
-.tile.kept:hover, .tile.kept.open { border-color: var(--green); }
-.tile:hover { border-color: var(--accent-blue); transform: translateY(-1px); }
+.tile:hover { border-color: var(--z-blue-border); }
+.tile:active { transform: translateY(1px) scale(0.99); }
+.tile.open { border-color: var(--z-blue-border); }
 
-/* keyboard cursor */
-.tile.focused {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 1px var(--accent-blue);
+.tile.focused, .tile:focus-visible {
+  outline: none;
+  border-color: var(--z-blue);
+  box-shadow: 0 0 0 1px var(--z-blue), var(--z-shadow);
 }
 
-/* tile info as zed's little kbd chips, no photo-app gradient */
+.tile.dropped img { opacity: 0.35; filter: grayscale(0.6); }
+
+/* Small values sit in Zed's keycap shape: hairline, inset lip, mono. */
 .tile .meta {
   position: absolute;
   left: 4px; right: 4px; bottom: 4px;
@@ -373,48 +309,37 @@ button:focus-visible, .field:focus-visible {
   pointer-events: none;
 }
 
-.tile .meta span {
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0;
-  padding: 1px 4px;
-  border-radius: 2px;
+.tile .meta span, .tile .badge, .member .key {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid rgba(199, 203, 210, 0.7);
+  border-radius: 4px;
   background: rgba(255, 255, 255, 0.85);
-  color: var(--offgray-700);
-  border: 1px solid color-mix(in srgb, var(--offgray-200) 50%, transparent);
+  box-shadow: rgba(111, 123, 144, 0.1) 0 -2px 0 0 inset;
+  color: var(--z-text);
+  font: 10px/1 var(--z-mono);
+  letter-spacing: 0;
 }
 
 .tile .badge {
   position: absolute;
-  top: 5px; right: 5px;
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0;
-  padding: 1px 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.85);
-  color: var(--offgray-700);
-  border: 1px solid color-mix(in srgb, var(--offgray-200) 50%, transparent);
+  top: 4px; right: 4px;
 }
 
-.tile.open .badge, .tile .badge.override {
-  color: var(--accent-blue);
-  border-color: var(--accent-blue);
-}
+.tile .badge.override { color: var(--z-blue); border-color: var(--z-blue-border); }
+.tile.dropped .badge { color: var(--z-red); border-color: rgba(228, 0, 20, 0.35); }
 
-.tile.dropped { border-color: var(--border); }
-.tile.dropped img { opacity: 0.35; filter: grayscale(0.6); }
-.tile.dropped .badge { color: var(--red); border-color: var(--red); }
-
-/* ---- expanded group row ---- */
+/* --- expanded group ----------------------------------------------------- */
 
 .group-row {
   grid-column: 1 / -1;
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-left: 2px solid var(--green);
+  padding: 10px 12px;
+  background: var(--z-bg);
+  border: 1px solid var(--z-border);
   border-radius: 4px;
-  padding: 12px 14px;
+  box-shadow: var(--z-shadow);
   animation: row-in 180ms ease-out both;
 }
 
@@ -423,40 +348,38 @@ button:focus-visible, .field:focus-visible {
   to { opacity: 1; transform: none; }
 }
 
-.group-row.dropped { border-left-color: var(--red); }
-
 .group-row .group-head {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  letter-spacing: 0;
-  color: var(--offgray-500);
-  margin-bottom: 10px;
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: baseline;
   gap: 12px;
+  min-height: 28px;
+  margin-bottom: 8px;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
 }
 
-/* zed quiet button: h-6, transparent until hover */
+/* Zed's secondary button: white/50, hairline, grey inset lip. */
 .drop-btn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  gap: 6px;
   height: 24px;
   padding: 0 8px;
-  font-size: 13px;
-  background: none;
-  border: 1px solid transparent;
+  border: 1px solid rgba(199, 203, 210, 0.5);
   border-radius: 4px;
-  color: var(--red);
-  transition: border-color 120ms, background 120ms;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: rgba(111, 123, 144, 0.1) 0 -2px 0 0 inset;
+  color: var(--z-red);
+  font: 14px/1 var(--z-sans);
+  letter-spacing: -0.35px;
+  transition: background-color 0.12s, transform 0.05s;
 }
 
-.drop-btn:hover {
-  background: color-mix(in srgb, var(--offgray-100) 40%, transparent);
-  border-color: var(--border);
-}
-
-.drop-btn.restore { color: var(--green); }
+.drop-btn:hover { background: #fff; }
+.drop-btn:active { transform: translateY(1px) scale(0.99); box-shadow: none; }
+.drop-btn.restore { color: var(--z-green); }
 
 .group-row .strip {
   display: flex;
@@ -468,25 +391,9 @@ button:focus-visible, .field:focus-visible {
 .member {
   position: relative;
   flex: 0 0 132px;
-  background: none;
-  border: none;
   padding: 0;
-  cursor: pointer;
-}
-
-/* number-key chip on each candidate, zed kbd style */
-.member .key {
-  position: absolute;
-  top: 4px; left: 4px;
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0;
-  padding: 1px 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.85);
-  color: var(--offgray-700);
-  border: 1px solid color-mix(in srgb, var(--offgray-200) 50%, transparent);
-  pointer-events: none;
+  border: 0;
+  background: none;
 }
 
 .member:disabled { cursor: default; opacity: 0.5; }
@@ -496,212 +403,197 @@ button:focus-visible, .field:focus-visible {
   width: 132px;
   height: 132px;
   object-fit: cover;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  transition: border-color 120ms;
+  border: 1px solid var(--z-border);
+  border-radius: 4px;
+  transition: border-color 0.12s;
 }
 
-.member:not(:disabled):not(.is-pick):hover img { border-color: var(--accent-blue); }
+.member:not(:disabled):not(.is-pick):hover img { border-color: var(--z-blue-border); }
+.member.is-pick img { border-color: var(--z-green); }
+.member:active:not(:disabled) { transform: translateY(1px) scale(0.99); }
 
-.member.is-pick img { border-color: var(--green); }
+.member .key { position: absolute; top: 4px; left: 4px; pointer-events: none; }
 
 .member .cos {
   display: block;
   margin-top: 4px;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0;
-  color: var(--offgray-500);
   text-align: center;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+  font-variant-numeric: tabular-nums;
 }
 
-.member .cos.borderline { color: var(--amber); }
-.member .cos.pick-label { color: var(--green); }
+.member .cos.borderline { color: var(--z-amber); }
+.member .cos.pick-label { color: var(--z-green); }
 
-/* ---- rail: running job rows ---- */
+/* --- jobs --------------------------------------------------------------- */
 
 .job-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 40px;
+  height: 32px;
   padding: 0 12px;
-  font-family: var(--mono);
-  font-size: 11px;
+  font: 11px/1.6 var(--z-mono);
   letter-spacing: 0;
+  color: var(--z-muted);
 }
 
 .job-dot {
-  flex: 0 0 7px;
+  flex: none;
+  width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--offgray-400);
+  background: var(--z-muted);
 }
 
-.job-item.running .job-dot { background: var(--accent-blue); animation: pulse 1.2s infinite; }
-.job-item.queued .job-dot { background: var(--offgray-400); }
-.job-item.error .job-dot { background: var(--red); }
+.job-item.running .job-dot { background: var(--z-blue); animation: pulse 1.2s infinite; }
+.job-item.error .job-dot { background: var(--z-red); }
 
-@keyframes pulse {
-  50% { opacity: 0.3; }
-}
+@keyframes pulse { 50% { opacity: 0.3; } }
 
 .job-text { min-width: 0; }
 
 .job-id {
   display: block;
-  color: var(--offgray-700);
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--z-text);
 }
 
-.job-stage { color: var(--offgray-400); }
-.job-item.error .job-stage { color: var(--red); }
+.job-item.error .job-stage { color: var(--z-red); }
 
-/* ---- meta line under walk title ---- */
+/* --- ingest form -------------------------------------------------------- */
 
-.meta-line {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  letter-spacing: 0;
-  color: var(--offgray-400);
-  margin-bottom: 8px;
+.ingest {
+  max-width: 512px;
+  padding: 20px 16px 16px;
+  background: #fff;
+  border: 1px solid var(--z-border);
+  border-radius: 8px;
+  box-shadow: var(--z-shadow);
 }
-
-/* ---- ingest form ---- */
-
-.ingest { max-width: 560px; padding-top: 8px; }
 
 .dropzone {
-  border: 1px dashed var(--border);
-  border-radius: 4px;
-  background: var(--white);
-  padding: 36px 20px;
+  padding: 28px 20px;
   text-align: center;
-  font-family: var(--mono);
-  font-size: 12.5px;
-  letter-spacing: 0;
-  color: var(--offgray-500);
-  cursor: pointer;
-  transition: border-color 120ms, color 120ms, background 120ms;
+  border: 1px dashed var(--z-border);
+  border-radius: 4px;
+  background: var(--z-bg);
+  color: var(--z-muted);
+  transition: border-color 0.12s, color 0.12s, background-color 0.12s;
 }
 
 .dropzone:hover, .dropzone.over {
-  border-color: var(--accent-blue);
-  color: var(--black);
-  background: color-mix(in srgb, var(--accent-blue) 3%, var(--white));
+  border-color: var(--z-blue-border);
+  background: var(--z-blue-soft);
+  color: var(--z-blue);
 }
 
 .dropzone.has-file {
-  border-color: var(--green);
-  color: var(--green);
   border-style: solid;
+  border-color: var(--z-blue-border);
+  color: var(--z-text);
 }
 
 .field {
   width: 100%;
-  background: var(--white);
-  border: 1px solid var(--border);
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--z-border);
   border-radius: 4px;
-  color: var(--black);
-  font-family: var(--mono);
-  font-size: 12.5px;
-  letter-spacing: 0;
-  padding: 8px 10px;
+  background: #fff;
+  color: var(--z-text);
+  font: 14px/1 var(--z-sans);
+  letter-spacing: -0.35px;
   outline: none;
-  transition: border-color 120ms;
+  transition: border-color 0.12s;
 }
 
-.field:focus { border-color: var(--accent-blue); }
-.field::placeholder { color: var(--offgray-400); }
+.field:focus { border-color: var(--z-blue-border); }
+.field::placeholder { color: var(--z-muted); }
 
 .meta-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px 14px;
-  margin-top: 18px;
+  gap: 10px 12px;
+  margin-top: 16px;
 }
 
 .meta-field span {
   display: block;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--offgray-400);
   margin-bottom: 4px;
+  font-size: 13px;
+  color: var(--z-muted);
 }
 
-.form-error {
-  margin-top: 14px;
-  font-family: var(--mono);
-  font-size: 12px;
-  letter-spacing: 0;
-  color: var(--red);
+.form-error { margin-top: 12px; font-size: 13px; color: var(--z-red); }
+
+/* Zed's CTA: accent fill with an inset bottom lip. */
+.go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  margin-top: 16px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--z-blue);
+  color: #fff;
+  font: 14px/1 var(--z-sans);
+  letter-spacing: -0.35px;
+  box-shadow: hsl(219, 93%, 30%) 0 -2px 0 0 inset,
+              hsl(219, 93%, 95%) 0 1px 3px 0;
+  transition: background-color 0.12s, transform 0.05s;
 }
 
-/* upload progress: thin accent bar + mono percent */
+.go:hover:not(:disabled) { background: hsl(219, 93%, 40%); }
+.go:active:not(:disabled) { transform: translateY(1px) scale(0.99); box-shadow: none; }
+.go:disabled { opacity: 0.5; cursor: default; }
+
 .upload-progress {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 14px;
 }
 
 .upload-bar {
   flex: 1;
-  height: 4px;
+  height: 3px;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--offgray-100) 60%, transparent);
+  background: var(--z-border);
   overflow: hidden;
 }
 
 .upload-fill {
   height: 100%;
   border-radius: 2px;
-  background: var(--accent-blue);
+  background: var(--z-blue);
   transition: width 200ms linear;
 }
 
 .upload-pct {
-  flex-shrink: 0;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0;
-  color: var(--offgray-500);
-  min-width: 44px;
+  flex: none;
+  min-width: 60px;
   text-align: right;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+  font-variant-numeric: tabular-nums;
 }
 
-/* zed primary button: h-8 accent fill with the soft 1px shadow */
-.go {
-  display: inline-flex;
-  align-items: center;
-  margin-top: 18px;
-  height: 32px;
-  padding: 0 20px;
-  font-size: 14px;
-  background: var(--accent-blue);
-  color: var(--offgray-50);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  transition: background 120ms;
-}
-
-.go:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-blue) 88%, var(--black)); }
-.go:disabled { opacity: 0.5; cursor: default; }
-
-/* ---- states ---- */
+/* --- states ------------------------------------------------------------- */
 
 .empty, .error {
-  padding: 60px 0;
+  padding: 48px 0;
   text-align: center;
-  color: var(--offgray-400);
-  font-family: var(--mono);
   font-size: 13px;
-  letter-spacing: 0;
+  color: var(--z-muted);
 }
 
-.error { color: var(--red); }
+.error { color: var(--z-red); }

@@ -5,6 +5,16 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>accio</title>
+    <!-- Zed's web UI runs IBM Plex Sans (their `plexsans` webfont). -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+          rel="stylesheet" />
+    <style>
+      /* #f1f0ee is what Zed's cream stack composites to; inlined so the
+         surface is right on the first paint, before the stylesheet lands. */
+      html, body { height: 100%; margin: 0; background: #f1f0ee; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
