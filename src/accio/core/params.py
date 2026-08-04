@@ -62,6 +62,9 @@ class DedupParams:
 
     tau: float = 0.94         # sits in the measured gap: different walls 0.936,
                               # same wall one step later 0.965
+    rule: str = "fixed"       # "fixed" uses tau as given; "auto" derives it from
+                              # the walk's own cosine distribution and writes the
+                              # resolved value back into tau
 
 
 @dataclass(frozen=True)

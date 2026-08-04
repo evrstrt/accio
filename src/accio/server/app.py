@@ -205,6 +205,7 @@ def pipeline_spec(walk_id: str) -> dict:
 
 class Rerun(BaseModel):
     tau: float | None = None
+    rule: str | None = None      # 'fixed' | 'auto'
 
 
 @app.post("/api/walks/{walk_id}/rerun")
@@ -213,6 +214,10 @@ def rerun(walk_id: str, r: Rerun) -> dict:
     from the cached embeddings: seconds, no stitch, no GPU."""
     out = walk_dir(walk_id)
     params = walk_params(walk_id)
+    if r.rule is not None:
+        if r.rule not in ("fixed", "auto"):
+            raise HTTPException(422, f"unknown threshold rule {r.rule!r}")
+        params = replace(params, dedup=replace(params.dedup, rule=r.rule))
     if r.tau is not None:
         if not 0 < r.tau < 1:
             raise HTTPException(422, "tau must be between 0 and 1")

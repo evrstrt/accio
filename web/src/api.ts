@@ -52,7 +52,7 @@ export type PipelineSpec = {
   faces: { fov_deg: number; size: number; yaws: number[] }
   gate: { window: number; band: [number, number] }
   embed: { model_name: string; img_size: number; batch_size: number }
-  dedup: { tau: number }
+  dedup: { tau: number; rule: string }
   embed_model_used: string
 }
 
@@ -102,7 +102,7 @@ export const fetchJobs = () => req<Job[]>('/api/jobs')
 
 // staged settings, applied to an existing walk (Select re-runs from the
 // cached embeddings, so this returns in seconds)
-export type Pending = { tau?: number }
+export type Pending = { tau?: number; rule?: 'fixed' | 'auto' }
 
 export const postRerun = (walkId: string, p: Pending) =>
   req<{ faces: number; anchors: number; absorbed: number }>(

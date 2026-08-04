@@ -289,7 +289,7 @@ export default function App() {
     return () => clearInterval(t)
   }, [active, refreshWalks, selected, walk])
 
-  const dirtyFrom = pending.tau != null ? 'select' : null
+  const dirtyFrom = pending.tau != null || pending.rule ? 'select' : null
 
   const apply = useCallback(() => {
     if (!selected) return

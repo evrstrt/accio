@@ -160,16 +160,30 @@ export default function Inspector({ stage, walk, pending, onEdit, onOpenReview }
         <Group title="component">
           <Row label="Rule"><Select value="greedy cosine"
                                     options={['greedy cosine', 'agglomerative', 'coverage']} /></Row>
-          <Row label="Threshold"><Select value="fixed" options={['fixed', 'per video (auto)']} /></Row>
+          <Row label="Threshold">
+            <select
+              className="insp-control"
+              value={pending.rule ?? p.dedup.rule}
+              onChange={(e) => {
+                const rule = e.target.value as 'fixed' | 'auto'
+                onEdit(rule === p.dedup.rule ? {} : { rule })
+              }}
+            >
+              <option value="fixed">fixed</option>
+              <option value="auto">per video (auto)</option>
+            </select>
+          </Row>
         </Group>
         <Group title="settings">
           <Row label="τ">
-            {/* the one live control: editing stages a re-run, it does not
-                apply until Apply */}
+            {/* live: editing stages a re-run, nothing happens until Apply.
+                Under the auto rule the walk derives its own value, so the
+                number is shown but not editable. */}
             <input
               className="insp-control num"
               type="number" step={0.005} min={0.5} max={0.999}
               value={pending.tau ?? p.dedup.tau}
+              disabled={(pending.rule ?? p.dedup.rule) === 'auto'}
               onChange={(e) => {
                 const v = Number(e.target.value)
                 onEdit(Number.isFinite(v) && v !== p.dedup.tau ? { tau: v } : {})

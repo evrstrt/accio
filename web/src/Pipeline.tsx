@@ -84,7 +84,8 @@ const BLOCKS: Block[] = [
   {
     id: 'select',
     title: 'Select',
-    sub: (w) => `greedy cosine · τ ${w.pipeline.dedup.tau}`,
+    sub: (w) => `greedy cosine · τ ${w.pipeline.dedup.tau}`
+      + (w.pipeline.dedup.rule === 'auto' ? ' auto' : ''),
     stat: (w) => `${w.stages.absorbed} absorbed`,
     live: (c) => (c.absorbed != null ? `${c.absorbed} absorbed` : ''),
     idle: 'greedy cosine',

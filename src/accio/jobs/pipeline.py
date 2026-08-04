@@ -8,7 +8,7 @@ row. The ingest job calls this; there is no other entry point.
 
 import csv
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from itertools import batched
 from pathlib import Path
 
@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from ..core import blur, extract, faces
-from ..core.dedup import greedy_dedup
+from ..core.dedup import greedy_dedup, resolve as resolve_dedup
 from ..core.embed import Embedder
 from ..core.params import PipelineParams
 
@@ -81,6 +81,10 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
     say("embed", "done")
 
     say("select", "running")
+    # an "auto" rule becomes a number here, before anything records it
+    params = replace(params, dedup=resolve_dedup(
+        embeddings, params.dedup, [p.index for p, _, _ in records],
+        [yaw for _, yaw, _ in records]))
     result = greedy_dedup(embeddings, params.dedup)
     write_manifest(out / "manifest.csv",
                    [(p.index, p.t_sec, yaw, path.name) for p, yaw, path in records],
@@ -135,10 +139,14 @@ def reselect(walk_out: Path, params: PipelineParams) -> dict:
         raise ValueError(f"manifest has {len(rows)} rows but "
                          f"{len(embeddings)} embeddings")
 
+    params = replace(params, dedup=resolve_dedup(
+        embeddings, params.dedup, [int(r["pano_idx"]) for r in rows],
+        [int(r["yaw"]) for r in rows]))
     result = greedy_dedup(embeddings, params.dedup)
     write_manifest(walk_out / "manifest.csv",
                    [(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]), r["path"])
                     for r in rows], result)
     save_params(walk_out, params)
     kept = len(result.kept)
-    return dict(faces=len(rows), anchors=kept, absorbed=len(rows) - kept)
+    return dict(faces=len(rows), anchors=kept, absorbed=len(rows) - kept,
+                tau=params.dedup.tau, rule=params.dedup.rule)
