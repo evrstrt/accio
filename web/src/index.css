@@ -12,6 +12,7 @@
   --z-text: oklch(0.358979 0.0154914 262.882);
   --z-icon: #3f4650;
   --z-muted: #6e7681;
+  --z-wire: #969ca5;   /* canvas links: grey, a step lighter than muted text */
   --z-blue: hsl(219, 93%, 35%);
   --z-blue-soft: hsl(219, 93%, 95%);
   --z-blue-border: hsl(219, 93%, 35%, 0.35);
@@ -541,7 +542,7 @@ select.insp-control { cursor: pointer; }
 
 .links path {
   fill: none;
-  stroke: var(--z-muted);
+  stroke: var(--z-wire);
   stroke-width: 1.5;
 }
 
@@ -549,7 +550,7 @@ select.insp-control { cursor: pointer; }
 .links path.aside { stroke-dasharray: 3 3; }
 
 .links marker path {
-  fill: var(--z-muted);
+  fill: var(--z-wire);
   stroke: none;
 }
 
