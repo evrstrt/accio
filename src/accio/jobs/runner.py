@@ -13,6 +13,7 @@ import traceback
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from ..core import extract
 from ..core.embed import Embedder, TimmEmbedder
 from ..core.segment import OpenVocabSegmenter, SemanticSegmenter, Segmenter
 from ..core.params import PipelineParams
@@ -67,8 +68,13 @@ class Runner:
         409s with "no failure to retry", and the canvas shows every stage
         queued forever. The one action that works is Delete, which also unlinks
         the multi-gigabyte original. Writing the failure down turns that into
-        one Retry click, and because stitch skips frames already exported, the
-        retry costs nothing for the work that did land.
+        one Retry click.
+
+        The stage recorded is what Retry re-enters at, so it is worth getting
+        right: panos.json is written at the end of the stitch, so its presence
+        means the expensive part is done and the retry starts at the gate. Its
+        absence means the kill landed inside the stitch, where the half-written
+        export is still digit-named and genuinely does get reused.
         """
         if not self.out_root.exists():
             return
@@ -77,10 +83,15 @@ class Runner:
                 continue
             if (walk / "manifest.csv").exists() or (walk / ERROR_FILE).exists():
                 continue
-            save_failure(walk, "stitch", "the server stopped mid-run",
-                         "No failure was recorded because the process did not "
-                         "live to write one. Retry picks up from the stitch, "
-                         "reusing whatever frames already landed.")
+            stitched = (walk / "pano" / extract.PANO_INDEX).exists()
+            save_failure(
+                walk, "gate" if stitched else "stitch",
+                "the server stopped mid-run",
+                "No failure was recorded because the process did not live to "
+                "write one. Retry picks up "
+                + ("from the gate; the stitch had already finished."
+                   if stitched else
+                   "from the stitch, reusing whatever frames already landed."))
 
     def embedder(self, params: PipelineParams) -> Embedder:
         """One embedder per backbone, kept between jobs.

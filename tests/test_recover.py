@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+from accio.core import extract
 from accio.jobs.pipeline import ERROR_FILE, read_failure
 from accio.jobs.runner import Runner
 
@@ -26,7 +27,7 @@ def walk(root, name, *, source=True, manifest=False, error=False):
     return d
 
 
-def test_a_walk_killed_mid_run_comes_back_retryable(tmp_path):
+def test_a_walk_killed_inside_the_stitch_retries_from_the_stitch(tmp_path):
     """Panoramas, no manifest, no failure: every route refused this, and the
     only working action also deleted the original video."""
     d = walk(tmp_path, "interrupted")
@@ -37,6 +38,18 @@ def test_a_walk_killed_mid_run_comes_back_retryable(tmp_path):
     assert failure is not None
     assert failure["stage"] == "stitch"       # what retry re-enters at
     assert "stopped mid-run" in failure["message"]
+
+
+def test_a_walk_killed_after_the_stitch_does_not_pay_for_it_twice(tmp_path):
+    """panos.json is written when the stitch finishes, and a finished stitch
+    is not reused by name: its output has been renamed out of the digit form
+    the skip looks for. Re-entering at the gate is the difference between a
+    click and another five minutes of Docker."""
+    d = walk(tmp_path, "died-in-embed")
+    (d / "pano").mkdir()
+    (d / "pano" / extract.PANO_INDEX).write_text("[]")
+    Runner(tmp_path).recover()
+    assert read_failure(d)["stage"] == "gate"
 
 
 def test_a_finished_walk_is_left_alone(tmp_path):

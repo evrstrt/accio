@@ -17,6 +17,8 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +28,16 @@ from .params import ExtractParams
 PANO_PREFIX = "pano_"
 PANO_EXT = ".jpg"
 PANO_INDEX = "panos.json"
+
+JPEG_EOI = b"\xff\xd9"       # every finished JPEG ends with this
+SDK_POLL = 2.0               # how often the stitch checks on itself
+SDK_STALL = 300.0            # no new frame for this long: it is stuck, not slow
+# a backstop under the stall detector, for a container that writes a frame just
+# often enough to look alive. Measured 0.41-0.78 s per panorama, so this is
+# roughly four times the worst rate seen plus room for a cold start.
+SDK_CAP_PER_FRAME = 3.0
+SDK_CAP_FLOOR = 600.0
+SDK_KILL_GRACE = 10.0        # then stop waiting on the client and kill it too
 
 
 def pano_name(index: int) -> str:
@@ -188,6 +200,82 @@ def sdk_cmd(video: Path, pano_dir: Path, frame_nos: list[int], cname: str,
             "-export_frame_index", "-".join(map(str, frame_nos))]
 
 
+def whole_jpeg(path: Path) -> bool:
+    """A JPEG that was finished, not one a killed container left half-written.
+
+    Every JPEG ends with the end-of-image marker, so its absence is exactly the
+    truncated case. Checking only that the file exists let a partial frame
+    satisfy the completeness check below; the stitch then reported success and
+    cv2.imread returned None three stages later, where it read as a Gate bug
+    and no retry could ever clear it.
+    """
+    try:
+        with open(path, "rb") as f:
+            if f.seek(0, 2) < 128:
+                return False
+            f.seek(-2, 2)
+            return f.read(2) == JPEG_EOI
+    except OSError:
+        return False
+
+
+def run_sdk(cmd: list[str], cname: str, done, stall: float, cap: float) -> str:
+    """Run the container until the frames land, it exits, or it stops making
+    progress. Returns "" on success, else why it failed.
+
+    Waiting for the process to exit is the wrong condition: the SDK regularly
+    writes every frame and then hangs in emulation teardown, so the work is
+    done long before the wait is. Waiting on the frames instead turns that hang
+    into a no-op. And the deadline is a stall rather than a total, because a
+    total has to be guessed from the frame count: the old 120 + 4n gave a
+    thirty-minute walk about nine hours across two attempts, on the one worker
+    thread, with nothing able to cancel it.
+    """
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err)
+        started = time.monotonic()
+        progress, seen, gave_up = started, -1, False
+        while True:
+            try:
+                proc.wait(timeout=SDK_POLL)
+                break                                  # exited on its own
+            except subprocess.TimeoutExpired:
+                pass
+            landed = done()
+            if landed is True:
+                break                                  # every frame is in
+            if landed != seen:
+                progress, seen = time.monotonic(), landed
+            now = time.monotonic()
+            if now - progress > stall or now - started > cap:
+                gave_up = True
+                break
+        if proc.poll() is None:
+            subprocess.run(["docker", "kill", cname], capture_output=True)
+            try:
+                proc.wait(timeout=SDK_KILL_GRACE)
+            except subprocess.TimeoutExpired:
+                # the kill did not take, or the client did not notice. Waiting
+                # on it here would undo the deadline we just enforced.
+                proc.kill()
+                proc.wait()
+        err.seek(0)
+        tail = err.read().decode("utf-8", "replace").strip()[-600:]
+
+    if done() is True:
+        return ""
+    if gave_up:
+        # our own signal is on proc.returncode by now, so ask the flag rather
+        # than the code, or giving up reads as "MediaSDK exited -9"
+        return "MediaSDK stopped making progress" + (f": {tail}" if tail else "")
+    if proc.returncode:
+        # the common one is not a bad video: it is Docker Desktop not running,
+        # which exits 125 and used to surface as a frame count
+        return f"MediaSDK exited {proc.returncode}" + (f": {tail}" if tail else "")
+    return "MediaSDK exited cleanly without exporting every frame" + (
+        f": {tail}" if tail else "")
+
+
 def stitch(video: Path, pano_dir: Path, params: ExtractParams) -> list[PanoFrame]:
     """Stitch the .insv in the MediaSDK container and return panoramas in order."""
     if shutil.which("docker") is None:
@@ -198,27 +286,32 @@ def stitch(video: Path, pano_dir: Path, params: ExtractParams) -> list[PanoFrame
     frame_nos = frame_numbers(native_fps, nframes, params.fps)
 
     def digit_jpgs() -> dict[int, Path]:
-        return {int(p.stem): p for p in pano_dir.glob("*.jpg") if p.stem.isdigit()}
+        return {int(p.stem): p for p in pano_dir.glob("*.jpg")
+                if p.stem.isdigit() and whole_jpeg(p)}
 
-    # The SDK occasionally finishes writing frames but never exits (emulation
-    # teardown hang), so: hard timeout, kill the container, and count the export
-    # as success if every requested frame landed. A prior killed run may also
-    # have left a complete export behind -> skip the stitch entirely.
-    if not set(frame_nos) <= set(digit_jpgs()):
+    def landed():
+        """True once every requested frame is in, else how many are, so the
+        caller can tell "slow" from "stuck"."""
+        have = set(digit_jpgs())
+        return True if set(frame_nos) <= have else len(have)
+
+    # A prior killed run may already have left a complete export behind, in
+    # which case there is nothing to do.
+    if landed() is not True:
         cname = "sdk-" + re.sub(r"[^a-zA-Z0-9_.-]", "", video.stem)
-        timeout = 120 + 4 * len(frame_nos)  # roomy: 5.7K dual-file stitches are slower
+        cap = SDK_CAP_PER_FRAME * len(frame_nos) + SDK_CAP_FLOOR
         for attempt in (1, 2):
-            try:
-                subprocess.run(sdk_cmd(video, pano_dir, frame_nos, cname, params),
-                               check=True, capture_output=True, timeout=timeout)
-            except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
-                subprocess.run(["docker", "kill", cname], capture_output=True)
-            if set(frame_nos) <= set(digit_jpgs()):
+            # a container that has not finished dying holds the name, and the
+            # retry would fail on that rather than on whatever went wrong
+            subprocess.run(["docker", "rm", "-f", cname], capture_output=True)
+            why = run_sdk(sdk_cmd(video, pano_dir, frame_nos, cname, params),
+                          cname, landed, SDK_STALL, cap)
+            if not why:
                 break
             if attempt == 2:
                 raise RuntimeError(
-                    f"MediaSDK exported {len(digit_jpgs())}/{len(frame_nos)} "
-                    f"frames for {video.name}")
+                    f"{why}\nExported {len(digit_jpgs())}/{len(frame_nos)} "
+                    f"frames for {video.name}.")
 
     exported = digit_jpgs()
     frames = []

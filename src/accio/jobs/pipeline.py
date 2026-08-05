@@ -170,9 +170,20 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
                 rule=params.dedup.rule)
 
 
+def imread(path: Path):
+    """cv2.imread answers None for anything it cannot decode, and every caller
+    here immediately takes .shape of it. Naming the file that failed beats an
+    AttributeError attributed to whichever stage happened to touch it first."""
+    img = cv2.imread(str(path))
+    if img is None:
+        raise RuntimeError(f"{path.name} is not a readable image; "
+                           "re-run from the stitch to write it again")
+    return img
+
+
 def gate(panos: list, params: PipelineParams) -> list:
     """The sharpest panorama per window; the rest were walked through."""
-    scores = [blur.score_pano(cv2.imread(str(p.path)), params.gate) for p in panos]
+    scores = [blur.score_pano(imread(p.path), params.gate) for p in panos]
     return [p for p, keep in zip(panos, blur.windowed_keep(scores, params.gate.window))
             if keep]
 
@@ -191,7 +202,7 @@ def render_faces(out: Path, sharp: list, params: PipelineParams) -> list[FaceRow
     records: list[FaceRow] = []
     sharpness: list[float] = []
     for p in sharp:
-        pano_img = cv2.imread(str(p.path))
+        pano_img = imread(p.path)
         for yaw, img in faces.render_faces(pano_img, params.faces).items():
             path = faces_dir / face_name(p.index, yaw)
             cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
@@ -207,7 +218,7 @@ def render_faces(out: Path, sharp: list, params: PipelineParams) -> list[FaceRow
 def embed_faces(out: Path, records: list[FaceRow], params: PipelineParams,
                 embedder: Embedder) -> np.ndarray:
     embeddings = np.concatenate([
-        embedder.embed([cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+        embedder.embed([cv2.cvtColor(imread(path), cv2.COLOR_BGR2RGB)
                         for _, _, _, path in chunk])
         for chunk in batched(records, EMBED_CHUNK)
     ])
@@ -264,7 +275,7 @@ def run_segment(out: Path, names: list[str], params: PipelineParams,
     classes: dict[str, dict[str, float]] = {}
     seen: dict[str, str] = {}
     for chunk in batched(names, EMBED_CHUNK):
-        images = [cv2.cvtColor(cv2.imread(str(faces_dir / n)), cv2.COLOR_BGR2RGB)
+        images = [cv2.cvtColor(imread(faces_dir / n), cv2.COLOR_BGR2RGB)
                   for n in chunk]
         segs, labels = segmenter.segment(images)
         for name, seg in zip(chunk, segs):
