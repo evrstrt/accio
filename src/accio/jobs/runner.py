@@ -13,7 +13,7 @@ import traceback
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from ..core.embed import Dinov3Embedder
+from ..core.embed import Embedder, TimmEmbedder
 from ..core.params import PipelineParams
 from .pipeline import STAGES, rerun, run_walk
 
@@ -49,11 +49,24 @@ class Runner:
     def __init__(self, out_root: Path, params: PipelineParams | None = None):
         self.out_root = out_root
         self.params = params or PipelineParams()
-        self.embedder = Dinov3Embedder(self.params.embed)  # loads on first job
+        self._embedders: dict[str, Embedder] = {}
         self.jobs: dict[int, Job] = {}
         self._ids = itertools.count(1)
         self._q: queue.Queue[Job] = queue.Queue()
         threading.Thread(target=self._work, daemon=True).start()
+
+    def embedder(self, params: PipelineParams) -> Embedder:
+        """One embedder per backbone, kept between jobs.
+
+        Per backbone, not one for the runner: a job that asked for a different
+        model would otherwise embed with the loaded one and record the name it
+        asked for, which is a lie no downstream check would catch. Weights load
+        on first use, so naming a backbone costs nothing until it runs.
+        """
+        name = params.embed.model_name
+        if name not in self._embedders:
+            self._embedders[name] = TimmEmbedder(params.embed)
+        return self._embedders[name]
 
     def submit(self, video: Path, first: str | None = None,
                params: PipelineParams | None = None, walk_id: str = "") -> Job:
@@ -81,13 +94,13 @@ class Runner:
                 job.stats.update(counts)
 
             try:
+                params = job.params or self.params
                 if job.first is None:
-                    run_walk(job.video, self.out_root, self.params, self.embedder,
-                             progress=progress)
+                    run_walk(job.video, self.out_root, params,
+                             self.embedder(params), progress=progress)
                 else:
-                    rerun(job.video, self.out_root / job.walkId,
-                          job.params or self.params, self.embedder, job.first,
-                          progress=progress)
+                    rerun(job.video, self.out_root / job.walkId, params,
+                          self.embedder(params), job.first, progress=progress)
                 job.status = "done"
             except Exception:
                 job.status = "error"

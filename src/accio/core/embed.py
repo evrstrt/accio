@@ -1,12 +1,16 @@
 """Stage 4: frozen-backbone image embeddings.
 
 The embedder sits behind a small protocol so the backbone stays swappable
-(DINOv2, AnyLoc-style descriptors) without touching dedup or the store. The
-default is DINOv3 ViT-B/16, CLS token: the PoC showed mean-pooled patch
-tokens collapse on bare concrete (median random-pair cosine 0.95).
+without touching dedup or the store. The default is DINOv3 ViT-B/16, CLS
+token: the PoC showed mean-pooled patch tokens collapse on bare concrete
+(median random-pair cosine 0.95).
 
-Preprocessing (INTER_AREA resize, mean/std from the timm config) matches the
-PoC that calibrated tau = 0.94; changing it invalidates the threshold.
+Preprocessing (INTER_AREA resize, mean/std from the timm config) comes from
+the model's own config, so it follows the backbone rather than being fixed.
+
+Cosines are not comparable between backbones: each one has its own scale for
+"the same thing", which is what the calibration stage measures. So a swap
+re-measures, and the threshold moves with it.
 
 Embeddings are L2-normalised float32, so dot product == cosine similarity
 everywhere downstream.
@@ -34,8 +38,11 @@ def l2_normalise(x: np.ndarray) -> np.ndarray:
     return (x / norms).astype(np.float32)
 
 
-class Dinov3Embedder:
-    """timm DINOv3, loaded lazily so importing this module stays cheap."""
+class TimmEmbedder:
+    """Any timm ViT, named by params.model_name, loaded lazily so importing
+    this module stays cheap. The backbone is the swappable part of the
+    pipeline; nothing downstream knows which one ran except by the name
+    recorded alongside the vectors."""
 
     def __init__(self, params: EmbedParams = EmbedParams()):
         self.params = params

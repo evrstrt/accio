@@ -59,6 +59,7 @@ export type PipelineSpec = {
   calib: { samples: number; quantile: number }
   dedup: { tau: number; rule: string }
   embed_model_used: string
+  backbones: string[]        // the models this walk could be re-embedded with
 }
 
 export type WalkDetail = {
@@ -153,6 +154,7 @@ export type Pending = {
   meta?: MetaEdit
   gate?: { window?: number; band?: [number, number] }
   faces?: { fov_deg?: number; size?: number; yaws?: number[] }
+  embed?: { model_name?: string; batch_size?: number }
   calib?: { samples?: number; quantile?: number }
   dedup?: { tau?: number; rule?: 'fixed' | 'calibrated' }
 }
@@ -166,7 +168,8 @@ export const STAGES = ['stitch', 'gate', 'faces', 'embed', 'calibrate', 'select'
 // which stage owns each section: editing it re-runs that stage and the rest.
 // `meta` is deliberately absent: it re-runs nothing.
 export const STAGE_OF: Record<string, string> = {
-  gate: 'gate', faces: 'faces', calib: 'calibrate', dedup: 'select',
+  gate: 'gate', faces: 'faces', embed: 'embed', calib: 'calibrate',
+  dedup: 'select',
 }
 
 /** A re-select answers with the new counts; anything heavier answers with the

@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..core import export, extract
-from ..core.params import PipelineParams
+from ..core.params import BACKBONES, PipelineParams
 from ..core.params import from_dict as params_from_dict
 from ..jobs import pipeline
 from ..jobs.runner import Runner
@@ -207,7 +207,8 @@ def pipeline_spec(walk_id: str) -> dict:
     actually ran (the npz records it, so a model swap stays visible)."""
     npz = walk_dir(walk_id) / "embeddings.npz"
     model = str(np.load(npz)["model"]) if npz.exists() else ""
-    return dict(asdict(walk_params(walk_id)), embed_model_used=model)
+    return dict(asdict(walk_params(walk_id)), embed_model_used=model,
+                backbones=list(BACKBONES))
 
 
 # which stage a section of the settings belongs to: editing it invalidates
@@ -227,6 +228,11 @@ class FacesPatch(BaseModel):
     yaws: list[int] | None = None
 
 
+class EmbedPatch(BaseModel):
+    model_name: str | None = None
+    batch_size: int | None = Field(None, ge=1, le=64)
+
+
 class CalibPatch(BaseModel):
     samples: int | None = Field(None, ge=2, le=200)
     quantile: float | None = Field(None, gt=0, le=50)
@@ -241,6 +247,7 @@ class Rerun(BaseModel):
     """Staged settings, by the section of the params they belong to."""
     gate: GatePatch | None = None
     faces: FacesPatch | None = None
+    embed: EmbedPatch | None = None
     calib: CalibPatch | None = None
     dedup: DedupPatch | None = None
 
@@ -259,6 +266,9 @@ def check(r: Rerun) -> None:
     if r.dedup and r.dedup.rule is not None and r.dedup.rule not in (
             "fixed", "calibrated"):
         raise HTTPException(422, f"unknown threshold rule {r.dedup.rule!r}")
+    if r.embed and r.embed.model_name is not None \
+            and r.embed.model_name not in BACKBONES:
+        raise HTTPException(422, f"unknown backbone {r.embed.model_name!r}")
 
 
 def merge(params: PipelineParams, r: Rerun
@@ -280,6 +290,11 @@ def merge(params: PipelineParams, r: Rerun
             continue
         params = replace(params, **{section: replace(current, **fields)})
         changed.update(f"{section}.{k}" for k in fields)
+    # the input size is not independent of the backbone: it has to divide by
+    # the patch size, so it follows the model rather than being chosen
+    if "embed.model_name" in changed:
+        params = replace(params, embed=replace(
+            params.embed, img_size=BACKBONES[params.embed.model_name]))
     stages = {STAGE_OF[f.split(".")[0]] for f in changed}
     first = min(stages, key=pipeline.STAGES.index, default=None)
     return params, first, changed

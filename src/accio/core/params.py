@@ -44,9 +44,21 @@ class GateParams:
                               # projection stretch + helmet
 
 
+# The backbones a walk can be embedded with. Input size is not free: it has to
+# divide by the model's patch size, so each one carries its own. Every entry
+# is a frozen ViT read at its CLS token, which keeps the cosines comparable in
+# kind even though their scales differ (which is what calibration measures).
+BACKBONES: dict[str, int] = {
+    "vit_base_patch16_dinov3.lvd1689m": 384,    # 24x24 patches
+    "vit_small_patch16_dinov3.lvd1689m": 384,   # same grid, a third the cost
+    "vit_base_patch14_dinov2.lvd142m": 392,     # 28x28, patch 14
+    "vit_base_patch16_clip_384.laion2b_ft_in12k_in1k": 384,
+}
+
+
 @dataclass(frozen=True)
 class EmbedParams:
-    """Frozen DINOv3 embeddings, CLS token (patch-mean collapses on bare
+    """Frozen ViT embeddings, CLS token (patch-mean collapses on bare
     concrete: median random-pair cosine 0.95)."""
 
     model_name: str = "vit_base_patch16_dinov3.lvd1689m"

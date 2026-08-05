@@ -2,9 +2,9 @@ import type { ReactNode } from 'react'
 import type { Calibration, Pending, Section, WalkDetail } from './api'
 
 // Per-stage panels. Settings are live: editing one stages a re-run from the
-// stage it belongs to, and nothing happens until Apply. Choosing a different
-// component (a second stitcher, another backbone) is the part that is not
-// built yet, so those controls are disabled rather than pretending.
+// stage it belongs to, and nothing happens until Apply. Where a stage has only
+// one implementation its component control is disabled rather than pretending
+// to offer a choice; Embed is the first one that has more than one.
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -63,6 +63,15 @@ function Val({ children }: { children: ReactNode }) {
   return <span className="insp-value">{children}</span>
 }
 
+/** "vit_base_patch16_dinov3.lvd1689m" -> "DINOv3 ViT-B/16" */
+export function backboneLabel(name: string): string {
+  const m = /vit_(base|small|large)_patch(\d+)_(\w+?)[._]/.exec(name)
+  if (!m) return name
+  const size = { base: 'B', small: 'S', large: 'L' }[m[1]] ?? m[1]
+  const family = { dinov3: 'DINOv3', dinov2: 'DINOv2', clip: 'CLIP' }[m[3]] ?? m[3]
+  return `${family} ViT-${size}/${m[2]}`
+}
+
 function Out({ children }: { children: ReactNode }) {
   return <div className="insp-out">{children}</div>
 }
@@ -92,6 +101,7 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
   // what a control shows: the staged edit if there is one, else what ran
   const gate = { ...p.gate, ...pending.gate }
   const faces = { ...p.faces, ...pending.faces }
+  const emb = { ...p.embed, ...pending.embed }
   const cal = { ...p.calib, ...pending.calib }
   const dedup = { ...p.dedup, ...pending.dedup }
   const m = { ...meta, ...pending.meta }
@@ -275,20 +285,43 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
   }
 
   if (stage === 'embed') {
+    const swapped = emb.model_name !== p.embed_model_used
     return (
       <>
         <Group title="component">
-          <Row label="Backbone"><Fixed value="DINOv3 ViT-B/16"
-                                       options={['DINOv3 ViT-B/16', 'DINOv2 ViT-B/14',
-                                                 'RADIO', 'CLIP ViT-B/16']} /></Row>
+          <Row label="Backbone">
+            {/* the first stage with a real choice. Input size follows the
+                model, since it has to divide by the patch size. */}
+            <select
+              className="insp-control"
+              value={emb.model_name}
+              onChange={(e) => onEdit('embed', 'model_name', e.target.value)}
+            >
+              {p.backbones.map((b) => (
+                <option key={b} value={b}>{backboneLabel(b)}</option>
+              ))}
+            </select>
+          </Row>
           <Row label="Token"><Fixed value="CLS" options={['CLS', 'patch mean']} /></Row>
         </Group>
         <Group title="settings">
-          <Row label="Input size"><Val>{p.embed.img_size}</Val></Row>
-          <Row label="Batch size"><Val>{p.embed.batch_size}</Val></Row>
-          <Row label="Weights"><Val>{p.embed_model_used || p.embed.model_name}</Val></Row>
+          <Row label="Input size"><Val>{emb.img_size}</Val></Row>
+          <Row label="Batch size">
+            <Num value={emb.batch_size} min={1} max={64}
+                 onChange={(v) => onEdit('embed', 'batch_size', Math.round(v))} />
+          </Row>
+          <Row label="Weights"><Val>{p.embed_model_used || emb.model_name}</Val></Row>
         </Group>
-        <Out>{s.faces} vectors, 768d, L2 normalised</Out>
+        <div className="insp-note">
+          {swapped
+            ? <>A different backbone scores "the same thing" differently, so
+                Calibrate re-measures and the threshold moves with it. Weights
+                download on first use.</>
+            : <>Cosines are only comparable within one backbone. Calibrate
+                measures this one's scale for identical frames, which is what
+                makes two of them worth comparing.</>}
+        </div>
+        <Out>{s.faces} vectors, L2 normalised</Out>
       </>
     )
   }

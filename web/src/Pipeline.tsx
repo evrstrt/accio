@@ -1,4 +1,5 @@
 import { STAGES } from './api'
+import { backboneLabel } from './Inspector'
 import type { Job, StageState, WalkDetail } from './api'
 
 // The pipeline as blocks on the canvas: each one says what it emitted, so the
@@ -34,14 +35,6 @@ function footage(frames?: number, seconds?: number): string {
   const s = Math.round(seconds ?? 0)
   const clock = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
   return `${frames.toLocaleString()} frames · ${clock}`
-}
-
-/** "vit_base_patch16_dinov3.lvd1689m" -> "DINOv3 ViT-B/16" */
-function modelLabel(name: string): string {
-  const m = /vit_(base|small|large)_patch(\d+)_(dinov\d)/.exec(name)
-  if (!m) return name || 'unknown'
-  const size = { base: 'B', small: 'S', large: 'L' }[m[1]] ?? m[1]
-  return `${m[3].replace('dinov', 'DINOv')} ViT-${size}/${m[2]}`
 }
 
 const BLOCKS: Block[] = [
@@ -82,7 +75,7 @@ const BLOCKS: Block[] = [
   {
     id: 'embed',
     title: 'Embed',
-    sub: (w) => modelLabel(w.pipeline.embed_model_used || w.pipeline.embed.model_name),
+    sub: (w) => backboneLabel(w.pipeline.embed.model_name) || 'unknown',
     stat: (w) => `${w.stages.faces} vectors`,
     live: (c) => (c.faces ? `${c.faces} vectors` : ''),
     idle: 'DINOv3 ViT-B/16',
