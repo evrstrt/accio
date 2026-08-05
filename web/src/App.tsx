@@ -6,6 +6,7 @@ import type { Calibration, Decision, Face, Group, Job, Pending, Section,
               WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
 import Ingest from './Ingest'
+import Loader from './Loader'
 import Inspector, { backboneLabel } from './Inspector'
 import Pipeline, { rerunLabel } from './Pipeline'
 
@@ -286,6 +287,7 @@ export default function App() {
   const [pending, setPending] = useState<Pending>({})
   const [applying, setApplying] = useState(false)
   const [refused, setRefused] = useState<string | null>(null)
+  const [unreachable, setUnreachable] = useState<string | null>(null)
   // right-click on a walk: {id, x, y}, and `armed` once Delete is chosen
   const [menu, setMenu] = useState<
     { walk: WalkSummary; x: number; y: number; armed: boolean } | null>(null)
@@ -326,7 +328,15 @@ export default function App() {
     // job until it lands, so a 404 here is expected rather than an error
     setCalib(null)
     setShowCalib(false)
-    fetchWalk(selected).then(setWalk).catch(() => setWalk(null))
+    setUnreachable(null)
+    // a walk that will not load is not a walk that is still loading: without
+    // this the canvas sits on "Loading…" forever and never says why
+    fetchWalk(selected)
+      .then((w) => { setWalk(w); setUnreachable(null) })
+      .catch((e) => {
+        setWalk(null)
+        setUnreachable(e instanceof Error ? e.message : String(e))
+      })
     // measured on every run, so only walks made before it exists lack a record
     fetchCalibration(selected).then(setCalib).catch(() => setCalib(null))
   }, [selected])
@@ -635,7 +645,8 @@ export default function App() {
           </>
         )}
         {!error && !ingesting && !walk && !running && selected && (
-          <div className="empty">Loading…</div>
+          <Loader label={unreachable ? 'Could not open this walk' : 'Opening'}
+                  sub={selected} error={unreachable} />
         )}
         {!error && !ingesting && !selected && walks?.length === 0 && (
           <div className="empty">No walks yet. Add one with the + above.</div>

@@ -1100,6 +1100,100 @@ select.insp-control { cursor: pointer; }
   font-variant-numeric: tabular-nums;
 }
 
+/* --- loading ------------------------------------------------------------
+
+   The same mark the ciq-demo free-roam viewer loads behind, so the two tools
+   read as one product. Timing notes are its comments, kept: the extrusion's
+   contours draw on in depth order over 3.4 s, and each face is filled with
+   whatever it stands on so the layer behind it is hidden, which is what makes
+   a flat SVG read as solid. */
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 96px 0;
+  text-align: center;
+}
+
+.loading .load-error {
+  max-width: 420px;
+  margin-top: 6px;
+  white-space: normal;
+  color: var(--z-red);
+}
+
+.tsx-loader {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  /* The mark's faces are filled with whatever it stands on, so each layer
+     hides the ones behind it -- that is what makes a flat SVG read as a
+     solid. It stands on the page surface now, not on a white card, so
+     white would show as a white shape. */
+  --card: var(--z-surface);
+  --line: var(--z-blue);
+}
+.tsx-loader .wf {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  /* the extrusion adds real width, so the drawing shrinks to stay inside */
+  transform: scale(0.74);
+  transform-origin: 50% 50%;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+/* Stroke widths are in the 842-unit viewBox: at 72 px and scale(.74) a
+   unit is 0.063 px, so 8 draws a 0.5 px line -- sub-pixel, which is why
+   the mark reads as delicate. Nudged up from the study's 7/6/5, which
+   went grey at this size. */
+.tsx-loader .wf path {
+  fill: var(--card);
+  stroke: var(--line);
+  stroke-width: 8;
+  stroke-dasharray: 3000;
+  animation: wd-draw 3.4s ease-in-out infinite;
+}
+.tsx-loader .wf .bk { stroke-width: 6; opacity: 0.72; }
+.tsx-loader .wf .w { stroke-width: 7; animation-delay: 0.22s; }
+.tsx-loader .wf .fr { fill: none; animation-delay: 0.44s; }
+.tsx-loader .wf .frfill { fill: var(--card); stroke: none; animation: none; }
+.tsx-loader .wf .tbg {
+  fill: var(--line);
+  fill-opacity: 0.17;
+  stroke: none;
+  animation: none;
+}
+.tsx-loader .wf .cap {
+  stroke-dasharray: 145;
+  animation: wd-cap 3.4s linear infinite;
+}
+
+@keyframes wd-draw {
+  0%, 4% { stroke-dashoffset: 3000; }
+  40%, 74% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -3000; }
+}
+/* The front face finishes drawing at 40% of its own timeline, delayed
+   0.44 s -- 1.80 s absolute, 53% of the cycle -- so the caps wait for it. */
+@keyframes wd-cap {
+  0%, 47% { stroke-dashoffset: 145; }
+  49.18%, 86% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -145; }
+}
+
+.z-mono {
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- states ------------------------------------------------------------- */
 
 /* the whole-page states. Named apart from the `error` modifier that marks a
