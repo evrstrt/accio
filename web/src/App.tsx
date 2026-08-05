@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
          deleteWalk, fetchSegmentation, patchMeta, postRerun, retryWalk,
-         STAGES, STAGE_OF } from './api'
+         serverSaid, STAGES, STAGE_OF } from './api'
 import type { Calibration, Decision, Face, Group, Job, Pending, Section,
               Segmentation, WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
@@ -266,6 +266,10 @@ function KeptGrid({ walk, onDecision }: {
 }
 
 /** Same row as a finished walk: the name, then a dot instead of the counts. */
+// A run in flight. Errored jobs are not shown here: the walk's own row carries
+// the failure and the context menu that can act on it.
+// traceback.format_exc ends in a newline, so .pop() on the untrimmed string
+// returns '' and the tooltip read "Failed: " with nothing after it.
 function JobItem({ job, active, onClick }: {
   job: Job
   active: boolean
@@ -275,7 +279,8 @@ function JobItem({ job, active, onClick }: {
     <button
       className={`walk-item${active ? ' active' : ''}`}
       onClick={onClick}
-      title={job.status === 'error' ? `Failed: ${job.error.split('\n').pop()}`
+      title={job.status === 'error'
+        ? `Failed: ${job.error.trim().split('\n').pop()}`
         : job.stage || job.status}
     >
       <span className="walk-id">{job.walkId}</span>
@@ -305,15 +310,26 @@ export default function App() {
   const [calib, setCalib] = useState<Calibration | null>(null)
   const [showCalib, setShowCalib] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // the server stopped answering. Distinct from `error`, which is something
+  // a request said: this is nobody saying anything, and it clears itself.
+  const [offline, setOffline] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   const exportUrl = selected
     ? `/api/walks/${encodeURIComponent(selected)}/export` : ''
   const job = jobs.find((j) => j.walkId === selected) ?? null
-  const running = job !== null && job.status !== 'done'
-  const activeJobs = jobs.filter((j) => j.status !== 'done')
+  // An errored job is finished, not in flight. Treating it as running hid the
+  // failure notice, locked the inspector, kept Review and Export away, and
+  // filtered the walk's own row out of the rail, which is where the context
+  // menu carrying Retry and Delete lives. The one recovery path in the app
+  // disappeared exactly when it was needed.
+  const inFlight = (j: Job) => j.status === 'queued' || j.status === 'running'
+  const running = job !== null && inFlight(job)
+  const activeJobs = jobs.filter(inFlight)
 
   const refreshWalks = useCallback(
-    () => fetchWalks().then(setWalks).catch((e) => setError(String(e))),
+    () => fetchWalks().then((ws) => { setWalks(ws); setOffline(false) })
+      .catch(() => setOffline(true)),
     [])
 
   useEffect(() => {
@@ -396,8 +412,9 @@ export default function App() {
           reload(selected).catch(() => {})
         }
         const stillActive = js.some((j) => j.status === 'queued' || j.status === 'running')
+        setOffline(false)
         if (!stillActive) refreshWalks()
-      }).catch(() => {})
+      }).catch(() => setOffline(true))
     }, active ? 2000 : 8000)
     return () => clearInterval(t)
   }, [active, refreshWalks, reload, selected, walk])
@@ -447,6 +464,7 @@ export default function App() {
 
   const onRetry = useCallback((id: string) => {
     setMenu(null)
+    setError(null)
     retryWalk(id)
       .then(() => fetchJobs().then(setJobs))
       .catch((e) => setError(String(e)))
@@ -454,6 +472,7 @@ export default function App() {
 
   const onDelete = useCallback((id: string) => {
     setMenu(null)
+    setError(null)
     deleteWalk(id)
       .then(() => fetchWalks())
       .then((ws) => {
@@ -465,8 +484,31 @@ export default function App() {
       .catch((e) => setError(String(e)))
   }, [])
 
+  const onExport = useCallback(() => {
+    if (!selected) return
+    setError(null)
+    setExporting(true)
+    fetch(exportUrl)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(serverSaid(await res.text().catch(() => ''))
+          || `${res.status} ${res.statusText}`)
+        return res.blob()
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${selected}.zip`
+        a.click()
+        URL.revokeObjectURL(url)
+      })
+      .catch((e) => setError(`Export failed: ${e.message}`))
+      .finally(() => setExporting(false))
+  }, [selected, exportUrl])
+
   const onDecision = useCallback((d: Decision) => {
     if (!selected) return
+    setError(null)
     postDecision(selected, d)
       .then(() => Promise.all([fetchWalk(selected), fetchWalks()]))
       .then(([w, ws]) => {
@@ -479,6 +521,9 @@ export default function App() {
   return (
     <div className="frame">
       <header className="topbar">
+        {/* the poll stopped answering. Without this the app freezes in its
+            last state and the running dot keeps pulsing at a dead server. */}
+        {offline && <div className="offline">server not responding</div>}
         <div className="crumb">
           <span className="crumb-dim">accio</span>
           <span className="sep">/</span>
@@ -511,7 +556,15 @@ export default function App() {
                   Masks
                 </button>
               )}
-              <a className="top-btn" href={exportUrl} download>Export</a>
+              {/* A bare download link gave no sign it had started, so an
+                  export that reads and EXIF-stamps every kept frame looked
+                  like a dead button and got clicked again, queueing another
+                  zip. Fetching it means the wait is visible and a refusal
+                  arrives as words rather than a downloaded error page. */}
+              <button className="top-btn" disabled={exporting}
+                      onClick={onExport}>
+                {exporting ? 'Exporting…' : 'Export'}
+              </button>
             </>
           )}
         </div>
@@ -612,8 +665,22 @@ export default function App() {
           </defs>
           <rect width="100%" height="100%" fill="url(#dot)" />
         </svg>
-        {error && <div className="page-error">{error}</div>}
-        {!error && ingesting && (
+        {/* A failed request used to replace the whole work area and stay there
+            until the browser was reloaded, losing your place in the grid. It
+            is one request that failed, so it says so and gets out of the way. */}
+        {error && (
+          <div className="banner">
+            <span>{error}</span>
+            <button className="icon-btn" onClick={() => setError(null)}
+                    aria-label="Dismiss">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+        {ingesting && (
           <Ingest
             onSubmitted={(job) => {
               setJobs((js) => [job, ...js])
@@ -622,7 +689,7 @@ export default function App() {
             }}
           />
         )}
-        {!error && !ingesting && (walk || running) && view === 'pipeline' && (
+        {!ingesting && (walk || running) && view === 'pipeline' && (
           <>
             {walk?.error && !running && (
               <div className="notice">
@@ -656,10 +723,10 @@ export default function App() {
                       dirtyFrom={dirtyFrom} onSelect={setInspect} />
           </>
         )}
-        {!error && !ingesting && walk && seg && view === 'masks' && (
+        {!ingesting && walk && seg && view === 'masks' && (
           <Segments seg={seg} />
         )}
-        {!error && !ingesting && walk && view === 'review' && (
+        {!ingesting && walk && view === 'review' && (
           <>
             <header className="walk-header">
               <div className="header-row">
@@ -671,12 +738,16 @@ export default function App() {
             <KeptGrid walk={walk} onDecision={onDecision} />
           </>
         )}
-        {!error && !ingesting && !walk && !running && selected && (
+        {!ingesting && !walk && !running && selected && (
           <Loader label={unreachable ? 'Could not open this walk' : 'Opening'}
                   sub={selected} error={unreachable} />
         )}
-        {!error && !ingesting && !selected && walks?.length === 0 && (
-          <div className="empty">No walks yet. Add one with the + above.</div>
+        {/* walks is null until the first list lands. Without this the app
+            opens to an empty dotted field saying nothing, while the rail
+            reads "Walks 0" as though that were the answer. */}
+        {!ingesting && walks === null && <Loader label="Loading walks" />}
+        {!ingesting && !selected && walks?.length === 0 && (
+          <div className="empty">No walks yet. Add one with the + to the left.</div>
         )}
       </main>
       {inspecting && (

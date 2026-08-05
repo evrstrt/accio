@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Calibration, Pending, Section, WalkDetail } from './api'
 
@@ -41,7 +42,17 @@ function Toggle({ on }: { on: boolean }) {
                 onChange={() => {}} />
 }
 
-/** A live number: edits stage a re-run, blanks and junk stage nothing. */
+/** A number you can actually edit.
+ *
+ * The field holds what was typed; the staged value is what it parses to. The
+ * previous version skipped onChange for an empty field, so the controlled
+ * `value` never changed and React wrote the old digits straight back: you
+ * could not backspace over 1024 to type 512 without selecting all first.
+ *
+ * Committing on blur rather than per keystroke also stops the pipeline staging
+ * nonsense on the way to a real number: typing 110 into a field used to stage
+ * 1, then 11, then 110, flashing "-89° of overlap per seam" in between.
+ */
 function Num({ value, step, min, max, disabled, onChange }: {
   value: number
   step?: number
@@ -50,18 +61,66 @@ function Num({ value, step, min, max, disabled, onChange }: {
   disabled?: boolean
   onChange: (v: number) => void
 }) {
+  const [text, setText] = useState<string | null>(null)
+
+  const commit = () => {
+    const v = Number(text)
+    setText(null)
+    if (text === null || text.trim() === '' || !Number.isFinite(v)) return
+    // clamp here rather than trusting the spinner: min/max are advisory on a
+    // typed value, and the server 422s what it will not accept
+    const bounded = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, v))
+    if (bounded !== value) onChange(bounded)
+  }
+
   return (
     <input className="insp-control num" type="number" disabled={disabled}
-           step={step ?? 1} min={min} max={max} value={value}
-           onChange={(e) => {
-             const v = Number(e.target.value)
-             if (e.target.value !== '' && Number.isFinite(v)) onChange(v)
+           step={step ?? 1} min={min} max={max}
+           value={text ?? String(value)}
+           onChange={(e) => setText(e.target.value)}
+           onBlur={commit}
+           onKeyDown={(e) => {
+             if (e.key === 'Enter') e.currentTarget.blur()
+             if (e.key === 'Escape') setText(null)
            }} />
   )
 }
 
 function Val({ children }: { children: ReactNode }) {
   return <span className="insp-value">{children}</span>
+}
+
+/** The class list, one per line.
+ *
+ * Same shape as Num and for the same reason: the textarea holds the raw text
+ * and only blur parses it. Trimming inside onChange made the control
+ * unusable, because a controlled value that has been through trim() and
+ * filter(Boolean) can never hold a trailing newline or a trailing space.
+ * Pressing Enter at the end of the list produced no line, and typing a space
+ * after "concrete" deleted it before "column" could follow, so none of the
+ * multi-word defaults could be typed at all.
+ */
+function Classes({ value, disabled, onChange }: {
+  value: string[]
+  disabled?: boolean
+  onChange: (v: string[]) => void
+}) {
+  const [text, setText] = useState<string | null>(null)
+  return (
+    <textarea
+      className="insp-control"
+      rows={8}
+      disabled={disabled}
+      value={text ?? value.join('\n')}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        const parsed = (text ?? '').split('\n').map((c) => c.trim()).filter(Boolean)
+        setText(null)
+        if (text !== null && parsed.join('\n') !== value.join('\n')) onChange(parsed)
+      }}
+      onKeyDown={(e) => { if (e.key === 'Escape') setText(null) }}
+    />
+  )
 }
 
 /** "vit_base_patch16_dinov3.lvd1689m" -> "DINOv3 ViT-B/16" */
@@ -477,14 +536,8 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
               <div className="insp-classes">
                 {/* one per line: the detector reads them as separate phrases,
                     and a long prompt makes it merge neighbouring ones */}
-                <textarea
-                  className="insp-control"
-                  rows={8}
-                  disabled={locked}
-                  value={seg.classes.join('\n')}
-                  onChange={(e) => edit('segment', 'classes',
-                    e.target.value.split('\n').map((c) => c.trim()).filter(Boolean))}
-                />
+                <Classes value={seg.classes} disabled={locked}
+                         onChange={(cs) => edit('segment', 'classes', cs)} />
               </div>
             </>
           )}

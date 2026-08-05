@@ -463,6 +463,43 @@ select.insp-control { cursor: pointer; }
 
 .notice b { font-weight: 500; }
 
+/* One request failed. It used to replace the work area and stay there until
+   the browser was reloaded, so a four-second network blip cost your place in
+   a six-hundred-tile grid. Same shape as .notice, with a way out. */
+.banner {
+  position: sticky;
+  top: calc(var(--topbar-h) + 12px);
+  z-index: 16;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: fit-content;
+  max-width: 720px;
+  margin: 0 auto 12px;
+  padding: 6px 8px 6px 12px;
+  background: #fff;
+  border: 1px solid rgba(228, 0, 20, 0.4);
+  border-radius: 6px;
+  box-shadow: var(--z-shadow-pop);
+  font-size: 13px;
+  color: var(--z-red);
+}
+
+.banner .icon-btn { color: var(--z-red); }
+
+/* the poll stopped answering: a state of the connection, not of a request */
+.offline {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--z-amber);
+  color: #fff;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+}
+
 /* the class list an open-vocabulary model looks for, one per line */
 .insp-classes { margin-top: 6px; }
 
