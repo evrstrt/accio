@@ -46,6 +46,33 @@ export async function readFrameSize(file: File): Promise<FrameSize | null> {
 
 export const lensesInFrame = (s: FrameSize) => (s.w >= s.h * 1.5 ? 2 : 1)
 
+// Insta360 appends its own trailer after the MP4, ending in this marker, with
+// the camera's model in a protobuf-shaped record inside it. Reading it here
+// means the form can show what it found rather than the operator guessing.
+const MAGIC = '8db42d694ccc418790edff439fe026bf'
+const TRAILER = 2 << 20
+
+export async function readCamera(file: File): Promise<string> {
+  const tail = new Uint8Array(
+    await file.slice(Math.max(0, file.size - TRAILER)).arrayBuffer())
+  const text = new TextDecoder('latin1').decode(tail)
+  if (!text.endsWith(MAGIC)) return ''
+  // field 2, length-delimited: \x12 <len> "Insta360 ..."
+  const at = /\x12([\x01-\x40])(Insta360 [ -~]{1,24})/.exec(text)
+  return at ? at[2].slice(0, at[1].charCodeAt(0)) : ''
+}
+
+// VID_20260728_114811_..., the camera's own local clock. The container's
+// creation_time is UTC, and a site cares which hour of its own day this was.
+const STAMP = /VID_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_/
+
+export function stampFromName(name: string): { date: string; time: string } {
+  const m = STAMP.exec(name)
+  return m
+    ? { date: `${m[1]}-${m[2]}-${m[3]}`, time: `${m[4]}:${m[5]}` }
+    : { date: '', time: '' }
+}
+
 /** Why this selection cannot be processed, or "" if it can. Mirrors the
     server's guards so the answer arrives before the upload, not after it. */
 export function whyNotReady(files: File[], sizes: (FrameSize | null)[]): string {

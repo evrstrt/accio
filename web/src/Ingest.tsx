@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { postIngest } from './api'
 import type { Job } from './api'
-import { readFrameSize, whyNotReady } from './insv'
+import { readCamera, readFrameSize, stampFromName, whyNotReady } from './insv'
 import type { FrameSize } from './insv'
 
 // The capture metadata that makes the dataset balanceable later. Only what
@@ -25,6 +25,7 @@ const FIELDS = [
 export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => void }) {
   const [files, setFiles] = useState<File[]>([])
   const [sizes, setSizes] = useState<(FrameSize | null)[]>([])
+  const [camera, setCamera] = useState('')
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -37,8 +38,23 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
   useEffect(() => {
     let live = true
     setSizes([])
+    setCamera('')
     Promise.all(files.map((f) => readFrameSize(f).catch(() => null)))
       .then((s) => { if (live) setSizes(s) })
+    if (!files.length) return
+    // Everything the file already knows, filled in on the spot rather than
+    // asked for: the camera out of Insta360's trailer, the moment off the
+    // camera's own clock in the name. Both stay editable.
+    const front = files.find((f) => f.name.includes('_00_')) ?? files[0]
+    readCamera(front).then((c) => { if (live) setCamera(c) }).catch(() => {})
+    const { date, time } = stampFromName(front.name)
+    const put = (name: string, v: string) => {
+      const el = formRef.current?.elements.namedItem(name) as HTMLInputElement | null
+      if (el && !el.value && v) el.value = v
+    }
+    put('shot_date', date)
+    put('shot_time', time)
+    recheck()
     return () => { live = false }
   }, [files])
 
@@ -117,8 +133,11 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
         ))}
       </div>
       <div className="insp-note">
-        Camera and time come from the file. Leave the date and time blank
-        unless the camera's clock was wrong.
+        {camera
+          ? <>Read from the file: <b>{camera}</b>, and the time off its own
+              clock. Correct them here if the camera was wrong.</>
+          : <>The camera and the time are read from the file; fill these in
+              only if it got them wrong.</>}
       </div>
       {/* say what is wrong with the selection while it can still be fixed */}
       {files.length > 0 && blocked && <div className="form-error">{blocked}</div>}
