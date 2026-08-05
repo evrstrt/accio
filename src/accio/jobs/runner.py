@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from ..core.embed import Embedder, TimmEmbedder
-from ..core.segment import SegformerSegmenter, Segmenter
+from ..core.segment import OpenVocabSegmenter, SemanticSegmenter, Segmenter
 from ..core.params import PipelineParams
 from .pipeline import STAGES, rerun, run_walk, save_failure
 
@@ -77,9 +77,14 @@ class Runner:
         if not params.segment.enabled:
             return None
         name = params.segment.model_name
-        if name not in self._segmenters:
-            self._segmenters[name] = SegformerSegmenter(params.segment)
-        return self._segmenters[name]
+        # keyed on the classes too: an open-vocabulary model with a different
+        # prompt is a different segmenter, whatever its weights are
+        key = f"{name}|{'|'.join(params.segment.classes)}"
+        if key not in self._segmenters:
+            self._segmenters[key] = (
+                OpenVocabSegmenter(params.segment) if params.segment.kind == "open"
+                else SemanticSegmenter(params.segment))
+        return self._segmenters[key]
 
     def submit(self, video: Path, first: str | None = None,
                params: PipelineParams | None = None, walk_id: str = "") -> Job:

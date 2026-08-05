@@ -26,7 +26,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..core import export, extract
-from ..core.params import BACKBONES, SEGMENTERS, PipelineParams
+from ..core.params import (BACKBONES, SEGMENTERS, SITE_CLASSES,
+                           PipelineParams)
 from ..core.params import from_dict as params_from_dict
 from ..jobs import pipeline
 from ..jobs.runner import Runner
@@ -298,7 +299,8 @@ def pipeline_spec(walk_id: str) -> dict:
     npz = walk_dir(walk_id) / "embeddings.npz"
     model = str(np.load(npz)["model"]) if npz.exists() else ""
     return dict(asdict(walk_params(walk_id)), embed_model_used=model,
-                backbones=list(BACKBONES), segmenters=list(SEGMENTERS))
+                backbones=list(BACKBONES), segmenters=SEGMENTERS,
+                site_classes=list(SITE_CLASSES))
 
 
 # which stage a section of the settings belongs to: editing it invalidates
@@ -332,6 +334,8 @@ class CalibPatch(BaseModel):
 class SegmentPatch(BaseModel):
     enabled: bool | None = None
     model_name: str | None = None
+    classes: list[str] | None = None
+    threshold: float | None = Field(None, gt=0, lt=1)
 
 
 class DedupPatch(BaseModel):
@@ -369,6 +373,13 @@ def check(r: Rerun) -> None:
     if r.segment and r.segment.model_name is not None \
             and r.segment.model_name not in SEGMENTERS:
         raise HTTPException(422, f"unknown segmenter {r.segment.model_name!r}")
+    if r.segment and r.segment.classes is not None:
+        named = [c.strip() for c in r.segment.classes if c.strip()]
+        if not named:
+            raise HTTPException(422, "name at least one class to look for")
+        if len(named) > 40:
+            raise HTTPException(422, "too many classes; a long prompt makes the "
+                                     "detector merge neighbouring phrases")
 
 
 def merge(params: PipelineParams, r: Rerun
@@ -422,7 +433,11 @@ def rerun(walk_id: str, r: Rerun) -> dict:
         first = "select"
     if first == "select":
         return dict(pipeline.reselect(out, params), changed=True)
-    video = walk_video(walk_id)
+    # only the stages that read the original need it: Calibrate stitches the
+    # neighbour frames it measures against, and everything below works from
+    # the faces already on disk
+    needs_video = pipeline.STAGES.index(first) <= pipeline.STAGES.index("calibrate")
+    video = walk_video(walk_id) if needs_video else WALKS_ROOT / walk_id
     return dict(runner().submit(video, first=first, params=params,
                                 walk_id=walk_id).public(), changed=True)
 

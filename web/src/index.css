@@ -463,6 +463,18 @@ select.insp-control { cursor: pointer; }
 
 .notice b { font-weight: 500; }
 
+/* the class list an open-vocabulary model looks for, one per line */
+.insp-classes { margin-top: 6px; }
+
+.insp-classes textarea {
+  width: 100%;
+  height: auto;
+  padding: 6px 8px;
+  font: 12px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  resize: vertical;
+}
+
 /* what a walk is made of, by class: the bar is the share, not decoration */
 .mix {
   display: grid;

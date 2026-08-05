@@ -67,12 +67,32 @@ class EmbedParams:
     device: str | None = None # None = auto: cuda, then mps, then cpu
 
 
-# Semantic segmenters, by cost. All ADE20K: the only public label set with an
-# interior's vocabulary. B0 is for seeing whether the stage is worth having,
-# B4 for the frames that get labelled.
-SEGMENTERS: tuple[str, ...] = (
-    "nvidia/segformer-b4-finetuned-ade-512-512",
-    "nvidia/segformer-b0-finetuned-ade-512-512",
+# The segmenters, and which kind each one is.
+#
+# "semantic" models label every pixel from a fixed list. All the ones here are
+# ADE20K, the only public label set with an interior's vocabulary, and they are
+# bounded by it: it has wall, floor, ceiling, door and window, and no rebar,
+# formwork or conduit at all. Measured on ASHV bare RCC (Aug 2026), Mask2Former
+# traces the wall/floor junction down a corridor that SegFormer-B4 reads as
+# wall, which is why it is the default.
+#
+# "open" models take the classes as text, so the vocabulary is whatever you
+# write. That is the only way to ask for the things a site is actually made of,
+# at the cost of finding instances rather than covering the frame.
+SEGMENTERS: dict[str, str] = {
+    "facebook/mask2former-swin-large-ade-semantic": "semantic",
+    "shi-labs/oneformer_ade20k_swin_large": "semantic",
+    "nvidia/segformer-b4-finetuned-ade-512-512": "semantic",
+    "nvidia/segformer-b0-finetuned-ade-512-512": "semantic",
+    "IDEA-Research/grounding-dino-base": "open",
+}
+
+# What a site is made of, in the words someone would use for it. Only the open
+# models read this; a semantic one is stuck with the list it was trained on.
+SITE_CLASSES: tuple[str, ...] = (
+    "rebar", "formwork", "scaffolding", "concrete column", "concrete beam",
+    "concrete slab", "block wall", "electrical conduit", "pipe", "duct",
+    "window opening", "door opening", "staircase", "debris", "plaster",
 )
 
 
@@ -86,8 +106,14 @@ class SegmentParams:
     """
 
     enabled: bool = False     # opt-in: it pulls a model and takes real time
-    model_name: str = SEGMENTERS[0]
+    model_name: str = "facebook/mask2former-swin-large-ade-semantic"
+    classes: tuple[str, ...] = SITE_CLASSES   # open-vocabulary models only
+    threshold: float = 0.2    # detection confidence, same
     device: str | None = None
+
+    @property
+    def kind(self) -> str:
+        return SEGMENTERS.get(self.model_name, "semantic")
 
 
 @dataclass(frozen=True)
@@ -136,6 +162,9 @@ def from_dict(d: dict) -> PipelineParams:
     gate = dict(d.get("gate", {}))
     if "band" in gate:
         gate["band"] = tuple(gate["band"])
+    segment = dict(d.get("segment", {}))
+    if "classes" in segment:
+        segment["classes"] = tuple(segment["classes"])
     return PipelineParams(
         extract=ExtractParams(**d.get("extract", {})),
         faces=FaceParams(**faces),
@@ -143,5 +172,5 @@ def from_dict(d: dict) -> PipelineParams:
         embed=EmbedParams(**d.get("embed", {})),
         calib=CalibParams(**d.get("calib", {})),
         dedup=DedupParams(**d.get("dedup", {})),
-        segment=SegmentParams(**d.get("segment", {})),
+        segment=SegmentParams(**segment),
     )

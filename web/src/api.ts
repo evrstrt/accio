@@ -75,10 +75,16 @@ export type PipelineSpec = {
   embed: { model_name: string; img_size: number; batch_size: number }
   calib: { samples: number; quantile: number }
   dedup: { tau: number; rule: string }
-  segment: { enabled: boolean; model_name: string }
+  segment: {
+    enabled: boolean
+    model_name: string
+    classes: string[]        // open-vocabulary models only
+    threshold: number
+  }
   embed_model_used: string
   backbones: string[]        // the models this walk could be re-embedded with
-  segmenters: string[]
+  segmenters: Record<string, string>   // model -> 'semantic' | 'open'
+  site_classes: string[]     // the default vocabulary for an open model
 }
 
 // what one configuration produced, appended every time a run finishes
@@ -222,7 +228,12 @@ export type Pending = {
   embed?: { model_name?: string; batch_size?: number }
   calib?: { samples?: number; quantile?: number }
   dedup?: { tau?: number; rule?: 'fixed' | 'calibrated' }
-  segment?: { enabled?: boolean; model_name?: string }
+  segment?: {
+    enabled?: boolean
+    model_name?: string
+    classes?: string[]
+    threshold?: number
+  }
 }
 
 export type Section = keyof Pending

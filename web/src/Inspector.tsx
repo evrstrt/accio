@@ -75,8 +75,12 @@ export function backboneLabel(name: string): string {
 
 /** "nvidia/segformer-b4-finetuned-ade-512-512" -> "SegFormer-B4 · ADE20K" */
 export function segmenterLabel(name: string): string {
-  const m = /segformer-(b\d)-finetuned-(\w+)-/.exec(name)
-  return m ? `SegFormer-${m[1].toUpperCase()} · ${m[2].toUpperCase()}20K` : name
+  const seg = /segformer-(b\d)-finetuned-ade/.exec(name)
+  if (seg) return `SegFormer-${seg[1].toUpperCase()} · ADE20K`
+  if (name.includes('mask2former')) return 'Mask2Former-L · ADE20K'
+  if (name.includes('oneformer')) return 'OneFormer-L · ADE20K'
+  if (name.includes('grounding-dino')) return 'Grounding DINO + SAM · your classes'
+  return name
 }
 
 function Out({ children }: { children: ReactNode }) {
@@ -420,6 +424,7 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
 
   if (stage === 'segment') {
     const seg = { ...p.segment, ...pending.segment }
+    const open = p.segmenters[seg.model_name] === 'open'
     return (
       <>
         <Group title="component">
@@ -427,13 +432,15 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
             <select className="insp-control" disabled={locked}
                     value={seg.model_name}
                     onChange={(e) => edit('segment', 'model_name', e.target.value)}>
-              {p.segmenters.map((m) => (
+              {Object.keys(p.segmenters).map((m) => (
                 <option key={m} value={m}>{segmenterLabel(m)}</option>
               ))}
             </select>
           </Row>
-          <Row label="Labels"><Fixed value="ADE20K, 150 classes"
-                                     options={['ADE20K, 150 classes']} /></Row>
+          <Row label="Labels">
+            <Fixed value={open ? 'whatever you name' : 'ADE20K, 150 classes'}
+                   options={[open ? 'whatever you name' : 'ADE20K, 150 classes']} />
+          </Row>
         </Group>
         <Group title="settings">
           <Row label="Run it">
@@ -441,8 +448,31 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
                    checked={seg.enabled}
                    onChange={(e) => edit('segment', 'enabled', e.target.checked)} />
           </Row>
-          <Row label="Scope"><Fixed value="kept frames"
-                                    options={['kept frames', 'every face']} /></Row>
+          {open && (
+            <>
+              <Row label="Confidence">
+                <Num value={seg.threshold} step={0.05} min={0.05} max={0.95}
+                     disabled={locked}
+                     onChange={(v) => edit('segment', 'threshold', v)} />
+              </Row>
+              <div className="insp-classes">
+                {/* one per line: the detector reads them as separate phrases,
+                    and a long prompt makes it merge neighbouring ones */}
+                <textarea
+                  className="insp-control"
+                  rows={8}
+                  disabled={locked}
+                  value={seg.classes.join('\n')}
+                  onChange={(e) => edit('segment', 'classes',
+                    e.target.value.split('\n').map((c) => c.trim()).filter(Boolean))}
+                />
+              </div>
+            </>
+          )}
+          {!open && (
+            <Row label="Scope"><Fixed value="kept frames"
+                                      options={['kept frames', 'every face']} /></Row>
+          )}
         </Group>
         {s.classMix.length > 0 && (
           <Group title="what the walk is made of">
@@ -461,10 +491,15 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
           </Group>
         )}
         <div className="insp-note">
-          Annotation only: it runs after the frame set is decided and never
-          changes it, so a wrong mask costs a correction and not a candidate.
-          Masks are class indices, and they leave in the export beside the
-          frames they belong to.
+          {open
+            ? <>The classes are the prompt, so it finds what you name rather
+                than covering the frame. Anything unnamed stays background.
+                Measured on bare RCC it reads openings well and needs the
+                confidence dropped to find much else.</>
+            : <>A fixed label set over every pixel. ADE20K has the shell of a
+                building and nothing a site is made of, so for rebar or
+                formwork you want the open-vocabulary model.</>}
+          {' '}Annotation only: it never changes which frames survive.
         </div>
         <Out>{seg.enabled ? `${s.segmented} of ${s.kept} masked` : 'off'}</Out>
       </>
