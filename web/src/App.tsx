@@ -5,11 +5,13 @@ import type { Calibration, Decision, Face, Group, Job, Pending, Section,
               WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
 import Ingest from './Ingest'
-import Inspector from './Inspector'
+import Inspector, { backboneLabel } from './Inspector'
 import Pipeline, { rerunLabel } from './Pipeline'
 
-// cosines this close to tau (0.94) deserve a second look
-const BORDERLINE = 0.955
+// A member that only just cleared the threshold is the one worth a second
+// look: it merged, but barely. The margin is relative to tau, which is per
+// walk now, so a calibrated threshold moves the highlight with it.
+const BORDERLINE_MARGIN = 0.015
 
 /** Fold one edit into the staged set. A value put back to what the walk
     actually has is not a change, so it un-stages instead of piling up.
@@ -69,8 +71,22 @@ function MetaLine({ walk }: { walk: WalkDetail }) {
   return <div className="meta-line">{bits.join(' · ')}</div>
 }
 
-function GroupRow({ group, onDecision }: {
+/** What produced these groups. Reviewing them is judging a threshold, so the
+    threshold and the backbone that scored against it belong on the page. */
+function RunLine({ walk }: { walk: WalkDetail }) {
+  const { dedup, embed } = walk.pipeline
+  return (
+    <div className="run-line">
+      τ {dedup.tau}{dedup.rule === 'calibrated' ? ' calibrated' : ''}
+      <span className="sep">·</span>
+      {backboneLabel(embed.model_name)}
+    </div>
+  )
+}
+
+function GroupRow({ group, tau, onDecision }: {
   group: Group
+  tau: number
   onDecision: (d: Decision) => void
 }) {
   const { anchor, members, pick, dropped } = group
@@ -108,7 +124,8 @@ function GroupRow({ group, onDecision }: {
               <img src={f.url} alt={`t=${f.tSec.toFixed(1)}s y${f.yaw}`} loading="lazy" />
               <span
                 className={`cos${isPick ? ' pick-label' : ''}${
-                  !isPick && f.cosine !== null && f.cosine < BORDERLINE ? ' borderline' : ''
+                  !isPick && f.cosine !== null
+                    && f.cosine < tau + BORDERLINE_MARGIN ? ' borderline' : ''
                 }`}
               >
                 {isPick ? (f.idx === anchor.idx ? 'auto pick' : 'override')
@@ -128,10 +145,24 @@ function KeptGrid({ walk, onDecision }: {
 }) {
   const [open, setOpen] = useState<number | null>(null)
   const [focus, setFocus] = useState(0)
+  const [cols, setCols] = useState(1)
   const gridRef = useRef<HTMLDivElement>(null)
   useEffect(() => { setOpen(null); setFocus(0) }, [walk.id])
 
   const groups = walk.groups
+
+  // How many tiles fit across, read from the grid's own resolved template.
+  // The expanded panel goes after the row it belongs to rather than straight
+  // after its tile, so opening a group does not leave the row half empty.
+  useEffect(() => {
+    const el = gridRef.current
+    if (!el) return
+    const measure = () => setCols(Math.max(1, getComputedStyle(el)
+      .gridTemplateColumns.split(' ').filter(Boolean).length))
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
 
   // keyboard review: arrows move, enter opens, x drops, 1-9 swap the pick
   useEffect(() => {
@@ -148,22 +179,13 @@ function KeptGrid({ walk, onDecision }: {
         e.preventDefault()
         setFocus((f) => Math.min(groups.length - 1, Math.max(0, f + d)))
       }
-      const cols = () => {
-        const ts = tiles()
-        let n = 0
-        for (const el of ts) {
-          if (el.offsetTop !== ts[0].offsetTop) break
-          n++
-        }
-        return Math.max(1, n)
-      }
       // legacy names (Right/Left/.../Return) for automation layers
       const key = {Right: 'ArrowRight', Left: 'ArrowLeft', Down: 'ArrowDown',
                    Up: 'ArrowUp', Return: 'Enter'}[e.key] ?? e.key
       if (key === 'ArrowRight') move(1)
       else if (key === 'ArrowLeft') move(-1)
-      else if (key === 'ArrowDown') move(cols())
-      else if (key === 'ArrowUp') move(-cols())
+      else if (key === 'ArrowDown') move(cols)
+      else if (key === 'ArrowUp') move(-cols)
       else if (key === 'Enter' || key === ' ') {
         e.preventDefault()
         setOpen((o) => (o === g.anchor.idx ? null : g.anchor.idx))
@@ -179,13 +201,18 @@ function KeptGrid({ walk, onDecision }: {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [groups, focus, open, onDecision])
+  }, [groups, focus, open, cols, onDecision])
 
   useEffect(() => {
     const tile = [...(gridRef.current?.children ?? [])]
       .filter((el) => el.classList.contains('tile'))[focus] as HTMLElement | undefined
     tile?.scrollIntoView({ block: 'nearest' })
   }, [focus])
+
+  // the last tile on the same visual row as the open one
+  const openAt = open === null ? -1 : groups.findIndex((g) => g.anchor.idx === open)
+  const panelAfter = openAt < 0 ? -1
+    : Math.min(groups.length - 1, Math.floor(openAt / cols) * cols + cols - 1)
 
   return (
     <>
@@ -215,8 +242,10 @@ function KeptGrid({ walk, onDecision }: {
               </span>
             </button>
           )
-          return isOpen
-            ? [tile, <GroupRow key={`row-${g.anchor.idx}`} group={g} onDecision={onDecision} />]
+          return i === panelAfter
+            ? [tile, <GroupRow key={`row-${open}`} group={groups[openAt]}
+                                tau={walk.pipeline.dedup.tau}
+                                onDecision={onDecision} />]
             : tile
         })}
       </div>
@@ -503,8 +532,11 @@ export default function App() {
         {!error && !ingesting && walk && view === 'review' && (
           <>
             <header className="walk-header">
+              <div className="header-row">
+                <Funnel walk={walk} />
+                <RunLine walk={walk} />
+              </div>
               <MetaLine walk={walk} />
-              <Funnel walk={walk} />
             </header>
             <KeptGrid walk={walk} onDecision={onDecision} />
           </>

@@ -267,15 +267,26 @@ button {
 
 /* --- walk header -------------------------------------------------------- */
 
+/* The summary comes first and the context under it: reviewing is judging the
+   funnel, and the site and operator are only there to say which walk. */
 .walk-header {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--z-border);
 }
 
-.meta-line, .funnel {
+.header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.meta-line, .funnel, .run-line {
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -286,10 +297,16 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.funnel { font-size: 12px; }
 .funnel .n { color: var(--z-text); }
 .funnel .n.kept-n { color: var(--z-green); }
 .funnel .n.drop-n { color: var(--z-red); }
 .funnel .arrow, .funnel .label { color: var(--z-muted); }
+
+/* what produced these groups, dimmed: context for the judgement, not the
+   judgement */
+.run-line { color: var(--z-wire); }
+.run-line .sep { opacity: 0.6; }
 
 /* Panel title, same weight as the sidebar header. line-height 1 so the space
    above the letterforms is the padding, not the padding plus half-leading. */
@@ -687,12 +704,15 @@ select.insp-control { cursor: pointer; }
   gap: 8px;
 }
 
+/* Site interiors are mostly white wall, so a hairline is not enough to hold a
+   frame: the tile needs an edge dark enough that the image reads as an image
+   and not as a hole in the page. */
 .tile {
   position: relative;
   padding: 0;
   overflow: hidden;
   background: var(--z-bg);
-  border: 1px solid var(--z-border);
+  border: 1px solid var(--z-wire);
   border-radius: 4px;
   box-shadow: var(--z-shadow);
   transition: border-color 0.12s, box-shadow 0.12s, transform 0.05s;
@@ -826,7 +846,7 @@ select.insp-control { cursor: pointer; }
   width: 132px;
   height: 132px;
   object-fit: cover;
-  border: 1px solid var(--z-border);
+  border: 1px solid var(--z-wire);
   border-radius: 4px;
   transition: border-color 0.12s;
 }
