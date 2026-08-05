@@ -443,6 +443,74 @@ select.insp-control { cursor: pointer; }
 .insp-btn:hover { background: #fff; }
 .insp-btn:active { transform: translateY(1px) scale(0.99); box-shadow: none; }
 
+/* --- right-click menu on a walk ---------------------------------------- */
+
+.ctx {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 168px;
+  max-width: 260px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--z-border);
+  border-radius: 6px;
+  box-shadow: var(--z-shadow-pop);
+}
+
+.ctx-item {
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--z-text);
+  text-align: left;
+  font-size: 13px;
+  transition: background-color 0.12s;
+}
+
+.ctx-item:hover { background: rgba(0, 0, 0, 0.05); }
+.ctx-item.danger { color: var(--z-red); }
+.ctx-item.danger:hover { background: rgba(228, 0, 20, 0.08); }
+
+.ctx-warn {
+  padding: 4px 8px 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--z-muted);
+}
+
+/* the row the menu belongs to, so it is clear what is about to go */
+.walk-item.menued { background: rgba(0, 0, 0, 0.05); }
+
+/* --- what each run gave: one line per configuration, newest first ------- */
+
+.runs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.run {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 10px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.run.current { background: var(--z-blue-soft); color: var(--z-blue); }
+.run-model { overflow: hidden; text-overflow: ellipsis; }
+.run-tau, .run-out { color: var(--z-text); }
+.run.current .run-tau, .run.current .run-out { color: inherit; }
+
 /* --- calibration modal: Zed's dialog, with the evidence in it ----------- */
 
 .z-scrim {

@@ -62,6 +62,20 @@ export type PipelineSpec = {
   backbones: string[]        // the models this walk could be re-embedded with
 }
 
+// what one configuration produced, appended every time a run finishes
+export type Run = {
+  at: string
+  from: string           // the stage that run entered at
+  backbone: string
+  tau: number
+  rule: string
+  reference: number      // what identical frames scored under that backbone
+  pairs: number
+  faces: number
+  anchors: number
+  absorbed: number
+}
+
 export type WalkDetail = {
   id: string
   faces: number
@@ -69,6 +83,7 @@ export type WalkDetail = {
   meta: WalkMeta
   stages: Stages
   pipeline: PipelineSpec
+  runs: Run[]            // newest first
 }
 
 export type StageState = 'queued' | 'running' | 'done' | 'error'
@@ -187,6 +202,10 @@ export const postRerun = (walkId: string, p: Pending) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(p),
   })
+
+export const deleteWalk = (walkId: string) =>
+  req<{ deleted: string; videos: string[] }>(
+    `/api/walks/${encodeURIComponent(walkId)}`, { method: 'DELETE' })
 
 export const patchMeta = (walkId: string, m: MetaEdit) =>
   req<WalkMeta>(`/api/walks/${encodeURIComponent(walkId)}/meta`, {

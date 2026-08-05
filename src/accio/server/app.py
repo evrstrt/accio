@@ -162,7 +162,8 @@ def walk_detail(walk_id: str) -> dict:
     return {"id": walk_id, "faces": len(faces), "groups": groups,
             "meta": db.walk_meta(conn(), walk_id),
             "stages": stage_counts(walk_id, rows, state),
-            "pipeline": pipeline_spec(walk_id)}
+            "pipeline": pipeline_spec(walk_id),
+            "runs": pipeline.read_runs(walk_dir(walk_id))}
 
 
 def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
@@ -389,6 +390,31 @@ def post_decision(walk_id: str, d: Decision) -> dict:
     db.log_decision(conn(), walk_id, rows[d.anchorIdx]["path"], d.action,
                     rows[d.pickIdx]["path"] if d.pickIdx is not None else None)
     return {"ok": True}
+
+
+@app.delete("/api/walks/{walk_id}")
+def delete_walk(walk_id: str) -> dict:
+    """Remove a walk: its frames, its decisions, and the video it came from.
+
+    The video goes too. This is a processing tool, not a store: leaving a
+    multi-gigabyte original with nothing in the app pointing at it is not
+    keeping the raw ground truth, it is leaking disk.
+    """
+    wdir = walk_dir(walk_id)
+    if runner().busy(walk_id):
+        raise HTTPException(409, "this walk is still running")
+    videos = [VIDEO_DIR / p.name for p in
+              extract.lens_files(VIDEO_DIR / _video_name(walk_id))]
+    shutil.rmtree(wdir)
+    for v in videos:
+        v.unlink(missing_ok=True)
+    db.forget_walk(conn(), walk_id)
+    return {"deleted": walk_id, "videos": [v.name for v in videos]}
+
+
+def _video_name(walk_id: str) -> str:
+    meta = db.walk_meta(conn(), walk_id) or {}
+    return Path(meta.get("videoFile") or f"{walk_id}.insv").name
 
 
 @app.get("/api/walks/{walk_id}/overrides")

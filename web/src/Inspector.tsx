@@ -369,6 +369,22 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
             : <>A cosine means nothing on its own. Calibrate measured identical
                 frames on this walk at {s.reference}.</>}
         </div>
+        {walk.runs.length > 1 && (
+          <Group title="what each run gave">
+            {/* the walk on disk only shows the last configuration that ran, so
+                comparing two backbones would otherwise mean keeping notes */}
+            <div className="runs">
+              {walk.runs.map((r, i) => (
+                <div className={`run${i === 0 ? ' current' : ''}`} key={r.at + i}>
+                  <span className="run-model">{backboneLabel(r.backbone)}</span>
+                  <span className="run-tau">τ {r.tau}</span>
+                  <span className="run-ref">ref {r.reference || '—'}</span>
+                  <span className="run-out">{r.absorbed} absorbed</span>
+                </div>
+              ))}
+            </div>
+          </Group>
+        )}
         <Out>{s.absorbed} absorbed, {s.anchors} anchors</Out>
       </>
     )

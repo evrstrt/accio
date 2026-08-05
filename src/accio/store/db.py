@@ -112,6 +112,13 @@ def walk_meta(conn: sqlite3.Connection, walk_id: str) -> dict | None:
     return dict(zip(cols, row))
 
 
+def forget_walk(conn: sqlite3.Connection, walk_id: str) -> None:
+    """Drop a walk's metadata and every decision made on it."""
+    conn.execute("DELETE FROM decisions WHERE walk_id = ?", (walk_id,))
+    conn.execute("DELETE FROM walks WHERE walk_id = ?", (walk_id,))
+    conn.commit()
+
+
 def log_decision(conn: sqlite3.Connection, walk_id: str, anchor: str,
                  action: str, pick: str | None = None) -> None:
     """Anchor and pick are face file names, so a decision keeps meaning the

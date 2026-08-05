@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
-         patchMeta, postRerun, STAGES, STAGE_OF } from './api'
+         deleteWalk, patchMeta, postRerun, STAGES, STAGE_OF } from './api'
 import type { Calibration, Decision, Face, Group, Job, Pending, Section,
               WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
@@ -285,6 +285,9 @@ export default function App() {
   const [pending, setPending] = useState<Pending>({})
   const [applying, setApplying] = useState(false)
   const [refused, setRefused] = useState<string | null>(null)
+  // right-click on a walk: {id, x, y}, and `armed` once Delete is chosen
+  const [menu, setMenu] = useState<
+    { walk: WalkSummary; x: number; y: number; armed: boolean } | null>(null)
   const [calib, setCalib] = useState<Calibration | null>(null)
   const [showCalib, setShowCalib] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -326,6 +329,21 @@ export default function App() {
     // measured on every run, so only walks made before it exists lack a record
     fetchCalibration(selected).then(setCalib).catch(() => setCalib(null))
   }, [selected])
+
+  useEffect(() => {
+    if (!menu) return
+    const close = () => setMenu(null)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    // capture, so the menu closes even on a click the target swallows
+    window.addEventListener('pointerdown', close, true)
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('pointerdown', close, true)
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [menu])
 
   const reload = useCallback((id: string) =>
     Promise.all([fetchWalk(id), fetchWalks()])
@@ -400,6 +418,19 @@ export default function App() {
       .finally(() => setApplying(false))
   }, [selected, metaEdit, settings, willRun, reload])
 
+  const onDelete = useCallback((id: string) => {
+    setMenu(null)
+    deleteWalk(id)
+      .then(() => fetchWalks())
+      .then((ws) => {
+        setWalks(ws)
+        setInspect(null)
+        setSelected(ws.length ? ws[0].id : null)
+        if (!ws.length) setWalk(null)
+      })
+      .catch((e) => setError(String(e)))
+  }, [])
+
   const onDecision = useCallback((d: Decision) => {
     if (!selected) return
     postDecision(selected, d)
@@ -468,8 +499,13 @@ export default function App() {
         {walks?.filter((w) => !activeJobs.some((j) => j.walkId === w.id)).map((w) => (
           <button
             key={w.id}
-            className={`walk-item${!ingesting && w.id === selected ? ' active' : ''}`}
+            className={`walk-item${!ingesting && w.id === selected ? ' active' : ''}${
+              menu?.walk.id === w.id ? ' menued' : ''}`}
             onClick={() => { setIngesting(false); setSelected(w.id) }}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setMenu({ walk: w, x: e.clientX, y: e.clientY, armed: false })
+            }}
           >
             <span className="walk-id">{w.id}</span>
             <span className="walk-stats">
@@ -478,6 +514,37 @@ export default function App() {
           </button>
         ))}
       </nav>
+      {menu && (
+        // right-click on a walk. Delete arms in place rather than opening a
+        // dialog, so the thing being deleted stays under the cursor.
+        <div
+          className="ctx"
+          style={{ left: menu.x, top: menu.y }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {menu.armed ? (
+            <>
+              <div className="ctx-warn">
+                Deletes {menu.walk.faces} frames, every review decision, and
+                the uploaded video.
+              </div>
+              <button className="ctx-item danger"
+                      onClick={() => onDelete(menu.walk.id)}>
+                Delete permanently
+              </button>
+              <button className="ctx-item" onClick={() => setMenu(null)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button className="ctx-item"
+                    onClick={() => setMenu({ ...menu, armed: true })}>
+              Delete Walk…
+            </button>
+          )}
+        </div>
+      )}
       <main className={`main${ingesting ? ' center' : ''}${
         inspecting ? ' inspected' : ''}${
         view === 'pipeline' && !ingesting ? ' pipeline' : ''}`}>

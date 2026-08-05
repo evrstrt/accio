@@ -1,6 +1,6 @@
 import pytest
 
-from accio.store.db import (connect, effective_state, log_decision,
+from accio.store.db import (connect, effective_state, forget_walk, log_decision,
                             override_log, save_walk_meta, update_walk_meta,
                             walk_meta)
 
@@ -98,3 +98,22 @@ def test_unknown_fields_are_refused_rather_than_ignored(tmp_path):
     conn = seeded(tmp_path)
     with pytest.raises(ValueError, match="video_file"):
         update_walk_meta(conn, "w1", video_file="elsewhere.insv")
+
+
+def test_forgetting_a_walk_takes_its_decisions_with_it(tmp_path):
+    conn = seeded(tmp_path)
+    save_walk_meta(conn, "w2", "w2.insv", site="ASHV")
+    log_decision(conn, "w1", A, "drop")
+    log_decision(conn, "w2", B, "drop")
+
+    forget_walk(conn, "w1")
+
+    assert walk_meta(conn, "w1") is None
+    assert effective_state(conn, "w1") == {}
+    # the other walk is untouched
+    assert walk_meta(conn, "w2")["site"] == "ASHV"
+    assert [d["walkId"] for d in override_log(conn)] == ["w2"]
+
+
+def test_forgetting_a_walk_that_was_never_there_is_not_an_error(tmp_path):
+    forget_walk(make_conn(tmp_path), "nope")

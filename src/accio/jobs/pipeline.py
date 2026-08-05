@@ -16,6 +16,7 @@ import csv
 import json
 import shutil
 from dataclasses import asdict, replace
+from datetime import datetime
 from itertools import batched
 from pathlib import Path
 
@@ -133,6 +134,7 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     kept = len(result.kept)
     say("select", "done", anchors=kept, absorbed=len(records) - kept)
 
+    log_run(out, params, calib, first, len(records), kept)
     return dict(walk=out.name, faces=len(records), anchors=kept,
                 absorbed=len(records) - kept, tau=params.dedup.tau,
                 rule=params.dedup.rule)
@@ -204,6 +206,45 @@ def read_calibration(out: Path) -> dict | None:
     return json.loads(path.read_text()) if path.exists() else None
 
 
+RUNS_FILE = "runs.jsonl"
+RUNS_KEPT = 20
+
+
+def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,
+            faces: int, anchors: int) -> None:
+    """Append what this configuration produced.
+
+    Every run already knows its backbone, its threshold, what identical frames
+    scored under it and how much that absorbed. Without writing it down,
+    comparing two backbones means keeping the numbers on paper: the walk on
+    disk only ever shows the last one that ran.
+    """
+    ref = (calib or {}).get("reference", {})
+    row = {
+        "at": datetime.now().isoformat(timespec="seconds"),
+        "from": first,
+        "backbone": params.embed.model_name,
+        "tau": params.dedup.tau,
+        "rule": params.dedup.rule,
+        "reference": ref.get("median", 0),
+        "pairs": ref.get("n", 0),
+        "faces": faces,
+        "anchors": anchors,
+        "absorbed": faces - anchors,
+    }
+    with open(out / RUNS_FILE, "a") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+def read_runs(out: Path, limit: int = RUNS_KEPT) -> list[dict]:
+    """The most recent runs, newest first."""
+    path = out / RUNS_FILE
+    if not path.exists():
+        return []
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line]
+    return rows[::-1][:limit]
+
+
 def save_calibration(out: Path, calib: dict) -> None:
     (out / "calibration.json").write_text(json.dumps(calib, indent=1))
 
@@ -273,12 +314,14 @@ def reselect(walk_out: Path, params: PipelineParams) -> dict:
         raise ValueError(f"manifest has {len(rows)} rows but "
                          f"{len(embeddings)} embeddings")
 
-    params = apply_rule(params, read_calibration(walk_out))
+    calib = read_calibration(walk_out)
+    params = apply_rule(params, calib)
     result = greedy_dedup(embeddings, params.dedup)
     write_manifest(walk_out / "manifest.csv",
                    [(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]), r["path"])
                     for r in rows], result)
     save_params(walk_out, params)
     kept = len(result.kept)
+    log_run(walk_out, params, calib, "select", len(rows), kept)
     return dict(faces=len(rows), anchors=kept, absorbed=len(rows) - kept,
                 tau=params.dedup.tau, rule=params.dedup.rule)
