@@ -42,15 +42,16 @@ function Toggle({ on }: { on: boolean }) {
 }
 
 /** A live number: edits stage a re-run, blanks and junk stage nothing. */
-function Num({ value, step, min, max, onChange }: {
+function Num({ value, step, min, max, disabled, onChange }: {
   value: number
   step?: number
   min?: number
   max?: number
+  disabled?: boolean
   onChange: (v: number) => void
 }) {
   return (
-    <input className="insp-control num" type="number"
+    <input className="insp-control num" type="number" disabled={disabled}
            step={step ?? 1} min={min} max={max} value={value}
            onChange={(e) => {
              const v = Number(e.target.value)
@@ -86,17 +87,21 @@ export function yawRing(n: number): number[] {
 
 const RINGS = [3, 4, 6]
 
-export default function Inspector({ stage, walk, pending, calib, onEdit,
+export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
                                    onOpenReview, onShowCalibration }: {
   stage: string
   walk: WalkDetail
   pending: Pending
   calib: Calibration | null
+  locked: boolean          // a run is in flight: look, do not touch
   onEdit: (section: Section, key: string, value: unknown) => void
   onOpenReview: () => void
   onShowCalibration: () => void
 }) {
   const { stages: s, pipeline: p, meta } = walk
+  // one gate rather than a `disabled` on each control: a staged edit during a
+  // run would be applied against settings the run is about to replace
+  const edit: typeof onEdit = (...a) => { if (!locked) onEdit(...a) }
 
   // what a control shows: the staged edit if there is one, else what ran
   const gate = { ...p.gate, ...pending.gate }
@@ -111,15 +116,17 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
         exported frame, so a typo would otherwise mean re-uploading the video. */
     const text = (key: keyof typeof m, label: string, type = 'text') => (
       <Row label={label}>
-        <input className="insp-control" type={type}
+        <input className="insp-control" type={type} disabled={locked}
                value={(m as Record<string, string>)[key] ?? ''}
-               onChange={(e) => onEdit('meta', key, e.target.value)} />
+               onChange={(e) => edit('meta', key, e.target.value)} />
       </Row>
     )
     return (
       <>
         <Group title="source">
           <Row label="File"><Val>{meta?.videoFile ?? walk.id}</Val></Row>
+          {/* read out of the .insv trailer at ingest, not typed */}
+          <Row label="Camera"><Val>{meta?.camera || 'unknown'}</Val></Row>
           <Row label="Frame"><Val>{s.source || 'unknown'}</Val></Row>
           <Row label="Lenses">
             {/* both packings are dual-fisheye: two circles in one 2:1 frame,
@@ -132,13 +139,15 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
         <Group title="capture metadata">
           {text('site', 'Site')}
           {text('building', 'Building')}
+          {text('floor', 'Floor')}
           {text('stage', 'Stage')}
           {text('operator', 'Operator')}
           <Row label="Mount height">
             <Num value={m.mountHeightCm ?? 0} min={0} max={1000}
-                 onChange={(v) => onEdit('meta', 'mountHeightCm', Math.round(v))} />
+                 disabled={locked} onChange={(v) => edit('meta', 'mountHeightCm', Math.round(v))} />
           </Row>
           {text('shotDate', 'Shot date', 'date')}
+          {text('shotTime', 'Shot time', 'time')}
         </Group>
         {s.lenses === 1 && (
           <div className="insp-warn">
@@ -190,15 +199,15 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
         <Group title="settings">
           <Row label="Window">
             <Num value={gate.window} min={1} max={120}
-                 onChange={(v) => onEdit('gate', 'window', Math.round(v))} />
+                 disabled={locked} onChange={(v) => edit('gate', 'window', Math.round(v))} />
           </Row>
           <Row label="Band top">
             <Num value={gate.band[0]} step={0.05} min={0} max={1}
-                 onChange={(v) => onEdit('gate', 'band', [v, gate.band[1]])} />
+                 disabled={locked} onChange={(v) => edit('gate', 'band', [v, gate.band[1]])} />
           </Row>
           <Row label="Band bottom">
             <Num value={gate.band[1]} step={0.05} min={0} max={1}
-                 onChange={(v) => onEdit('gate', 'band', [gate.band[0], v])} />
+                 disabled={locked} onChange={(v) => edit('gate', 'band', [gate.band[0], v])} />
           </Row>
         </Group>
         <div className="insp-note">
@@ -220,17 +229,17 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
         <Group title="settings">
           <Row label="Field of view">
             <Num value={faces.fov_deg} min={20} max={170}
-                 onChange={(v) => onEdit('faces', 'fov_deg', v)} />
+                 disabled={locked} onChange={(v) => edit('faces', 'fov_deg', v)} />
           </Row>
           <Row label="Face size">
             <Num value={faces.size} step={128} min={128} max={4096}
-                 onChange={(v) => onEdit('faces', 'size', Math.round(v))} />
+                 disabled={locked} onChange={(v) => edit('faces', 'size', Math.round(v))} />
           </Row>
           <Row label="Faces per pano">
             <select
-              className="insp-control"
+              className="insp-control" disabled={locked}
               value={String(faces.yaws.length)}
-              onChange={(e) => onEdit('faces', 'yaws', yawRing(Number(e.target.value)))}
+              onChange={(e) => edit('faces', 'yaws', yawRing(Number(e.target.value)))}
             >
               {(RINGS.includes(faces.yaws.length)
                 ? RINGS : [...RINGS, faces.yaws.length].sort((a, b) => a - b))
@@ -262,11 +271,11 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
         <Group title="settings">
           <Row label="Panoramas sampled">
             <Num value={cal.samples} min={2} max={200}
-                 onChange={(v) => onEdit('calib', 'samples', Math.round(v))} />
+                 disabled={locked} onChange={(v) => edit('calib', 'samples', Math.round(v))} />
           </Row>
           <Row label="Percentile">
             <Num value={cal.quantile} step={1} min={0.5} max={50}
-                 onChange={(v) => onEdit('calib', 'quantile', v)} />
+                 disabled={locked} onChange={(v) => edit('calib', 'quantile', v)} />
           </Row>
         </Group>
         {calib && (
@@ -306,9 +315,9 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
             {/* the first stage with a real choice. Input size follows the
                 model, since it has to divide by the patch size. */}
             <select
-              className="insp-control"
+              className="insp-control" disabled={locked}
               value={emb.model_name}
-              onChange={(e) => onEdit('embed', 'model_name', e.target.value)}
+              onChange={(e) => edit('embed', 'model_name', e.target.value)}
             >
               {p.backbones.map((b) => (
                 <option key={b} value={b}>{backboneLabel(b)}</option>
@@ -321,7 +330,7 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
           <Row label="Input size"><Val>{emb.img_size}</Val></Row>
           <Row label="Batch size">
             <Num value={emb.batch_size} min={1} max={64}
-                 onChange={(v) => onEdit('embed', 'batch_size', Math.round(v))} />
+                 disabled={locked} onChange={(v) => edit('embed', 'batch_size', Math.round(v))} />
           </Row>
           <Row label="Weights"><Val>{p.embed_model_used || emb.model_name}</Val></Row>
         </Group>
@@ -347,9 +356,9 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
                                    options={['greedy cosine', 'agglomerative', 'coverage']} /></Row>
           <Row label="Threshold">
             <select
-              className="insp-control"
+              className="insp-control" disabled={locked}
               value={dedup.rule}
-              onChange={(e) => onEdit('dedup', 'rule', e.target.value)}
+              onChange={(e) => edit('dedup', 'rule', e.target.value)}
             >
               <option value="fixed">fixed</option>
               <option value="calibrated">calibrated</option>
@@ -364,11 +373,11 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
               className="insp-control num"
               type="number" step={0.005} min={0.5} max={0.999}
               value={dedup.tau}
-              disabled={dedup.rule === 'calibrated'}
+              disabled={locked || dedup.rule === 'calibrated'}
               onChange={(e) => {
                 const v = Number(e.target.value)
                 if (e.target.value !== '' && Number.isFinite(v)) {
-                  onEdit('dedup', 'tau', v)
+                  edit('dedup', 'tau', v)
                 }
               }}
             />

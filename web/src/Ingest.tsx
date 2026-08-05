@@ -2,14 +2,19 @@ import { useRef, useState } from 'react'
 import { postIngest } from './api'
 import type { Job } from './api'
 
-// the item-8 capture metadata: what makes the dataset balanceable later
+// The capture metadata that makes the dataset balanceable later. Only what
+// the file cannot answer is asked: the camera model and the moment of the
+// walk are read out of the .insv at ingest. A value typed here still wins,
+// for a walk uploaded long after it was shot off a camera clock nobody set.
 const FIELDS = [
   { name: 'site', label: 'Site', placeholder: 'GCMR' },
   { name: 'building', label: 'Building', placeholder: 'tower 2' },
+  { name: 'floor', label: 'Floor', placeholder: '4, or basement' },
   { name: 'stage', label: 'Stage', placeholder: 'bare-rcc' },
   { name: 'operator', label: 'Operator', placeholder: 'who walked it' },
   { name: 'mount_height_cm', label: 'Mount Height (cm)', placeholder: '175', type: 'number' },
   { name: 'shot_date', label: 'Shot Date', placeholder: '', type: 'date' },
+  { name: 'shot_time', label: 'Shot Time', placeholder: '', type: 'time' },
 ] as const
 
 export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => void }) {
@@ -79,6 +84,10 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
             />
           </label>
         ))}
+      </div>
+      <div className="insp-note">
+        Camera and time come from the file. Leave the date and time blank
+        unless the camera's clock was wrong.
       </div>
       {error && <div className="form-error">{error}</div>}
       {busy && (

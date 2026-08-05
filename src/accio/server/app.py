@@ -115,10 +115,12 @@ async def ingest(
     files: list[UploadFile] = File([]),
     site: str = Form(""),
     building: str = Form(""),
+    floor: str = Form(""),
     stage: str = Form(""),
     operator: str = Form(""),
     mount_height_cm: int | None = Form(None),
     shot_date: str = Form(""),
+    shot_time: str = Form(""),
 ) -> dict:
     # Upload is the only ingest: this is a web app, the server has no access
     # to client paths. Dual-file recordings (_00_ front + _10_ back) arrive
@@ -163,9 +165,17 @@ async def ingest(
     finally:
         shutil.rmtree(hold, ignore_errors=True)
 
+    # The camera and the moment are in the file; only the operator knows the
+    # site, so only that is asked for. A form value still wins, since a walk
+    # can be uploaded long after it was shot from a camera clock nobody set.
+    cam = extract.camera(video)
+    stamp = extract.recorded_at(video)
     db.save_walk_meta(conn(), video.stem, video.name, site=site,
-                      building=building, stage=stage, operator=operator,
-                      mount_height_cm=mount_height_cm, shot_date=shot_date)
+                      building=building, floor=floor, stage=stage,
+                      operator=operator, mount_height_cm=mount_height_cm,
+                      shot_date=shot_date or stamp[:10],
+                      shot_time=shot_time or stamp[11:16],
+                      camera=cam.get("model", ""))
     job = runner().submit(video)
     return job.public()
 
@@ -388,19 +398,23 @@ def walk_video(walk_id: str) -> Path:
 
 
 # the API speaks camelCase, the table snake_case
-META_COLUMNS = {"site": "site", "building": "building", "stage": "stage",
-                "operator": "operator", "mountHeightCm": "mount_height_cm",
-                "shotDate": "shot_date"}
+META_COLUMNS = {"site": "site", "building": "building", "floor": "floor",
+                "stage": "stage", "operator": "operator",
+                "mountHeightCm": "mount_height_cm", "shotDate": "shot_date",
+                "shotTime": "shot_time", "camera": "camera"}
 
 
 class MetaPatch(BaseModel):
     """Capture metadata. Absent means unchanged; "" means cleared."""
     site: str | None = Field(None, max_length=200)
     building: str | None = Field(None, max_length=200)
+    floor: str | None = Field(None, max_length=200)
     stage: str | None = Field(None, max_length=200)
     operator: str | None = Field(None, max_length=200)
     mountHeightCm: int | None = Field(None, ge=0, le=1000)
     shotDate: str | None = Field(None, max_length=10)
+    shotTime: str | None = Field(None, max_length=5)
+    camera: str | None = Field(None, max_length=100)
 
 
 @app.patch("/api/walks/{walk_id}/meta")

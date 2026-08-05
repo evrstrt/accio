@@ -18,10 +18,13 @@ CREATE TABLE IF NOT EXISTS walks (
     video_file TEXT NOT NULL,
     site TEXT NOT NULL DEFAULT '',
     building TEXT NOT NULL DEFAULT '',
+    floor TEXT NOT NULL DEFAULT '',
     stage TEXT NOT NULL DEFAULT '',
     operator TEXT NOT NULL DEFAULT '',
     mount_height_cm INTEGER,
     shot_date TEXT NOT NULL DEFAULT '',
+    shot_time TEXT NOT NULL DEFAULT '',
+    camera TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS decisions (
@@ -42,7 +45,18 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     _retire_index_decisions(conn)
     conn.executescript(SCHEMA)
+    _add_missing_walk_columns(conn)
     return conn
+
+
+def _add_missing_walk_columns(conn: sqlite3.Connection) -> None:
+    """CREATE TABLE IF NOT EXISTS does not widen a table that already exists,
+    so fields added later are added here rather than by rebuilding the row."""
+    have = {r[1] for r in conn.execute("PRAGMA table_info(walks)")}
+    for col in ("floor", "shot_time", "camera"):
+        if col not in have:
+            conn.execute(f"ALTER TABLE walks ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+    conn.commit()
 
 
 def _retire_index_decisions(conn: sqlite3.Connection) -> None:
@@ -60,8 +74,8 @@ def _retire_index_decisions(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
-WALK_FIELDS = ("site", "building", "stage", "operator", "mount_height_cm",
-               "shot_date")
+WALK_FIELDS = ("site", "building", "floor", "stage", "operator",
+               "mount_height_cm", "shot_date", "shot_time", "camera")
 
 
 def save_walk_meta(conn: sqlite3.Connection, walk_id: str, video_file: str,
@@ -102,13 +116,14 @@ def update_walk_meta(conn: sqlite3.Connection, walk_id: str, **fields) -> None:
 
 def walk_meta(conn: sqlite3.Connection, walk_id: str) -> dict | None:
     row = conn.execute(
-        "SELECT walk_id, video_file, site, building, stage, operator, "
-        "mount_height_cm, shot_date FROM walks WHERE walk_id = ?",
+        "SELECT walk_id, video_file, site, building, floor, stage, operator, "
+        "mount_height_cm, shot_date, shot_time, camera FROM walks "
+        "WHERE walk_id = ?",
         (walk_id,)).fetchone()
     if row is None:
         return None
-    cols = ["walkId", "videoFile", "site", "building", "stage", "operator",
-            "mountHeightCm", "shotDate"]
+    cols = ["walkId", "videoFile", "site", "building", "floor", "stage",
+            "operator", "mountHeightCm", "shotDate", "shotTime", "camera"]
     return dict(zip(cols, row))
 
 

@@ -70,6 +70,70 @@ def probe_fps_nframes(video: Path) -> tuple[float, int]:
     return fps, frames
 
 
+# Insta360 appends its own trailer after the MP4, ending in this marker. The
+# records inside are protobuf-shaped: field 1 the serial, field 2 the model,
+# field 3 the firmware. Reading them beats asking the operator to type
+# "Insta360 X3" correctly, and it is the only place the camera is recorded.
+TRAILER_MAGIC = b"8db42d694ccc418790edff439fe026bf"
+TRAILER_SCAN = 2_000_000     # the record sits ~2 KB from the end; read wide
+
+
+def camera(video: Path) -> dict:
+    """Model, serial and firmware of the camera that shot this, or {}."""
+    size = video.stat().st_size
+    with open(video, "rb") as f:
+        f.seek(-min(size, TRAILER_SCAN), 2)
+        tail = f.read()
+    if not tail.endswith(TRAILER_MAGIC):
+        return {}
+    # The three fields sit in one record, so the model anchors it: the tags
+    # alone match binary gyro data all over the trailer.
+    at = re.search(rb"\x12([\x01-\x40])(Insta360 [ -~]{0,32})", tail)
+    if at is None:
+        return {}
+    model = tail[at.end(1):at.end(1) + at.group(1)[0]]
+    if not re.fullmatch(rb"[ -~]+", model):
+        return {}
+    out = {"model": model.decode()}
+
+    def field(tag: bytes, start: int) -> str:
+        """One length-delimited string at `start`, if that is where it is."""
+        if start < 0 or tail[start:start + 1] != tag:
+            return ""
+        n = tail[start + 1]
+        value = tail[start + 2:start + 2 + n]
+        return value.decode() if re.fullmatch(rb"[ -~]+", value or b"") else ""
+
+    # the serial is the field that ends where the model's tag begins, and the
+    # firmware is the one that starts after the model
+    for n in range(1, 33):
+        start = at.start() - n - 2
+        if tail[start:start + 1] == b"\x0a" and tail[start + 1] == n:
+            out["serial"] = field(b"\x0a", start)
+            break
+    out["firmware"] = field(b"\x1a", at.end(1) + at.group(1)[0])
+    return {k: v for k, v in out.items() if v}
+
+
+# VID_20260728_114811_..., the camera's own local clock. The container's
+# creation_time is UTC (06:18 for this 11:48 walk), and a site cares which
+# hour of its own day the walk happened, so the name wins when it parses.
+NAME_STAMP = re.compile(r"VID_(\d{8})_(\d{6})_")
+
+
+def recorded_at(video: Path) -> str:
+    """When the walk was shot, "YYYY-MM-DDTHH:MM", local if the name says so."""
+    m = NAME_STAMP.search(video.name)
+    if m:
+        d, t = m.group(1), m.group(2)
+        return f"{d[:4]}-{d[4:6]}-{d[6:]}T{t[:2]}:{t[2:4]}"
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format_tags=creation_time",
+         "-of", "default=nw=1:nk=1", str(video)],
+        capture_output=True, text=True).stdout.strip()
+    return out[:16] if out else ""
+
+
 def lenses_in_frame(width: int, height: int) -> int:
     """How many fisheye circles a frame holds.
 

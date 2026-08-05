@@ -1100,6 +1100,19 @@ select.insp-control { cursor: pointer; }
   font-variant-numeric: tabular-nums;
 }
 
+/* a run in flight: the panel still opens, because watching a stage is when
+   you most want to see what it is set to, but nothing in it can be changed */
+.insp-locked {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--z-border);
+  background: var(--z-blue-soft);
+  color: var(--z-blue);
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+}
+
+.insp-control:disabled, .insp-toggle:disabled { opacity: 0.55; cursor: default; }
+
 /* --- loading ------------------------------------------------------------
 
    The same mark the ciq-demo free-roam viewer loads behind, so the two tools

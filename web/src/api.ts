@@ -21,10 +21,13 @@ export type WalkMeta = {
   videoFile: string
   site: string
   building: string
+  floor: string
   stage: string
   operator: string
   mountHeightCm: number | null
   shotDate: string
+  shotTime: string
+  camera: string          // read out of the .insv, not typed
 } | null
 
 // a run that broke, recorded next to whatever it managed to produce
@@ -172,10 +175,13 @@ export const fetchJobs = () => req<Job[]>('/api/jobs')
 export type MetaEdit = {
   site?: string
   building?: string
+  floor?: string
   stage?: string
   operator?: string
   mountHeightCm?: number
   shotDate?: string
+  shotTime?: string
+  camera?: string
 }
 
 export type Pending = {

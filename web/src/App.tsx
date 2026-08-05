@@ -387,10 +387,11 @@ export default function App() {
     return () => clearInterval(t)
   }, [active, refreshWalks, reload, selected, walk])
 
-  // the inspector is a fixed panel over the right of the canvas, so the canvas
-  // has to give up the width or the pipeline centres under it
+  // The inspector is a fixed panel over the right of the canvas, so the canvas
+  // has to give up the width or the pipeline centres under it. It opens during
+  // a run too: watching a stage is the moment you most want to see what it is
+  // set to. Editing is what a run rules out, and that is the panel's business.
   const inspecting = view === 'pipeline' && !ingesting && !!inspect && !!walk
-    && !running
 
   const edited = Object.values(pending).reduce(
     (n, sec) => n + Object.keys(sec ?? {}).length, 0)
@@ -668,9 +669,16 @@ export default function App() {
               </svg>
             </button>
           </div>
+          {running && (
+            <div className="insp-locked">
+              {job?.stage ? `${job.stage} is running` : 'This walk is running'}
+              {' '}· settings are read-only until it lands
+            </div>
+          )}
           <div className="insp-body">
             <Inspector stage={inspect} walk={walk} pending={pending} calib={calib}
-                       onEdit={onEdit} onOpenReview={() => setView('review')}
+                       locked={running} onEdit={onEdit}
+                       onOpenReview={() => setView('review')}
                        onShowCalibration={() => setShowCalib(true)} />
           </div>
         </aside>
