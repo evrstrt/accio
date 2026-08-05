@@ -20,12 +20,13 @@ import threading
 from dataclasses import asdict, replace
 from pathlib import Path
 
+import cv2
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from ..core import export, extract
+from ..core import atomic, export, extract
 from ..core.params import (BACKBONES, SEGMENTERS, SITE_CLASSES,
                            PipelineParams)
 from ..core.params import from_dict as params_from_dict
@@ -673,8 +674,50 @@ def mask_image(walk_id: str, name: str) -> FileResponse:
 
 
 @app.get("/api/walks/{walk_id}/faces/{name}")
-def face_image(walk_id: str, name: str) -> FileResponse:
-    path = (walk_dir(walk_id) / "faces" / name).resolve()
-    if not path.is_relative_to(WALKS_ROOT) or not path.exists():
+def face_image(walk_id: str, name: str, w: int | None = None) -> FileResponse:
+    """A face, at its own size or at a thumbnail width.
+
+    The grids show these at about 150 px and the strip at 132, while the file
+    is 1024 square and around 280 KB. Sending the original meant a 132-group
+    walk pulled ~38 MB to fill squares that need a couple of hundred kilobytes
+    between them, and decoded a four-megabyte bitmap per tile; the review grid
+    took seconds to populate and scrolling thrashed. A real walk is an order of
+    magnitude worse.
+
+    Built on demand rather than at render time, so it costs nothing for a walk
+    nobody opens and needs no re-run for the walks that already exist.
+    """
+    faces = walk_dir(walk_id) / "faces"
+    path = (faces / name).resolve()
+    if not path.is_relative_to(faces.resolve()) or not path.exists():
         raise HTTPException(404, "no such face")
-    return FileResponse(path)
+    if w is None:
+        return FileResponse(path)
+    if w not in THUMB_WIDTHS:
+        raise HTTPException(422, f"thumbnail width must be one of "
+                                 f"{sorted(THUMB_WIDTHS)}")
+    return FileResponse(thumbnail(path, walk_dir(walk_id) / "thumbs", w))
+
+
+# a fixed set, so the route cannot be asked to fill a disk with one cache
+# entry per width somebody happened to type
+THUMB_WIDTHS = {256}
+
+
+def thumbnail(src: Path, cache: Path, width: int) -> Path:
+    """The face at `width`, generated once and kept beside the walk."""
+    out = cache / f"{width}" / src.name
+    if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+        return out
+    img = cv2.imread(str(src))
+    if img is None:
+        raise HTTPException(404, "no such face")
+    h = round(img.shape[0] * width / img.shape[1])
+    # INTER_AREA is the right filter downwards: it averages the pixels it drops
+    # rather than sampling past them, so thin structures survive as grey rather
+    # than disappearing between samples
+    small = cv2.resize(img, (width, h), interpolation=cv2.INTER_AREA)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    atomic.atomically(out, lambda tmp: cv2.imwrite(
+        str(tmp), small, [cv2.IMWRITE_JPEG_QUALITY, 82]))
+    return out

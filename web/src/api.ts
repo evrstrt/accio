@@ -153,6 +153,13 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
+/** The same face at thumbnail width.
+ *
+ * The grids draw these around 150 px and the file is 1024 square at roughly
+ * 280 KB, so the full one is about twelve times the bytes and fifty times the
+ * pixels a tile needs. Only the expanded views ask for the original. */
+export const thumb = (url: string, w = 256) => `${url}?w=${w}`
+
 export const fetchWalks = () => req<WalkSummary[]>('/api/walks')
 export const fetchWalk = (id: string) =>
   req<WalkDetail>(`/api/walks/${encodeURIComponent(id)}`)

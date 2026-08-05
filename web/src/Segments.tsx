@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { thumb } from './api'
 import type { Segmentation, SegFrame } from './api'
 
 // What the segmenter saw, drawn over the frames it saw it in.
@@ -51,6 +52,12 @@ function paint(canvas: HTMLCanvasElement, frame: HTMLImageElement,
   const out = ctx.getImageData(0, 0, size, size)
   const px = out.data
   const at = (x: number, y: number) => m[(y * size + x) * 4]
+  // one colour per class index, built once. classColour hashes the class name,
+  // and calling it inside the loop hashed a string per pixel: at 512 square
+  // with the areas shaded that is a quarter of a million string hashes a tile.
+  const palette: [number, number, number][] = []
+  const colourOf = (c: number) =>
+    palette[c] ?? (palette[c] = classColour(labels[c] ?? String(c)))
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const c = at(x, y)
@@ -58,7 +65,7 @@ function paint(canvas: HTMLCanvasElement, frame: HTMLImageElement,
         || (x < size - 1 && at(x + 1, y) !== c)
         || (y < size - 1 && at(x, y + 1) !== c)
       if (!edge && !fill) continue
-      const colour = classColour(labels[c] ?? String(c))
+      const colour = colourOf(c)
       const i = (y * size + x) * 4
       const a = edge ? 1 : 0.22
       px[i] = px[i] * (1 - a) + colour[0] * a
@@ -78,6 +85,13 @@ function load(src: string): Promise<HTMLImageElement> {
   })
 }
 
+/** Draw when it comes into view, not on mount.
+ *
+ * Every tile used to load two images and run a per-pixel loop the moment the
+ * page rendered, so a walk of a few hundred kept frames fired that many image
+ * pairs and canvases in one tick and locked the tab. It also painted twice,
+ * because `labels` resolves in an effect and arrives after the first pass, so
+ * the first paint used index-derived colours that did not match the legend. */
 function Overlay({ frame, labels, size, fill }: {
   frame: SegFrame
   labels: string[]
@@ -85,55 +99,58 @@ function Overlay({ frame, labels, size, fill }: {
   fill: boolean
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
+  const [near, setNear] = useState(false)
+  const [failed, setFailed] = useState(false)
+
   useEffect(() => {
+    const el = ref.current
+    if (!el || near) return
+    const io = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) { setNear(true); io.disconnect() }
+    }, { rootMargin: '400px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [near])
+
+  useEffect(() => {
+    // nothing to draw until the labels are known: painting first would use a
+    // different colour per class than the chips above claim
+    if (!near || !labels.length) return
     let live = true
-    Promise.all([load(frame.url), load(frame.mask)])
+    // the tiles are 220 px, so the 1024 original is fifty times the pixels
+    Promise.all([load(size <= 256 ? thumb(frame.url) : frame.url),
+                 load(frame.mask)])
       .then(([img, mask]) => {
         if (live && ref.current) paint(ref.current, img, mask, labels, size, fill)
       })
-      .catch(() => {})
+      .catch(() => { if (live) setFailed(true) })
     return () => { live = false }
-  }, [frame.url, frame.mask, labels, size, fill])
-  return <canvas ref={ref} width={size} height={size} />
+  }, [near, frame.url, frame.mask, labels, size, fill])
+
+  return (
+    <span className="overlay">
+      <canvas ref={ref} width={size} height={size} />
+      {/* a 404 mask used to leave a blank white square indistinguishable from
+          one that had not painted yet */}
+      {failed && <span className="overlay-bad" title="this frame or its mask
+                       could not be loaded" />}
+    </span>
+  )
 }
 
-/** Which mask index is which class. The run records it, because the mask is
-    indices and only the model knows what they mean; walks segmented before
-    that fall back to matching each frame's classes against its pixel counts,
-    which is right whenever no two classes cover exactly the same area. */
+/** Which mask index is which class.
+ *
+ * The run records it, because the mask is indices and only the model knows
+ * what they mean. There used to be a fallback that ranked indices by pixel
+ * count and matched them against each frame's class list, for masks written
+ * before the table existed. It was derived from frame 0 and applied to the
+ * whole walk, so any class absent from the opening frame went unnamed
+ * everywhere and rendered in a colour the legend disagreed with. Re-running
+ * segment is free and produces the table, so the guess is gone. */
 function useLabels(seg: Segmentation): string[] {
-  const [labels, setLabels] = useState<string[]>([])
-  useEffect(() => {
-    if (Object.keys(seg.labels ?? {}).length) {
-      const out: string[] = []
-      for (const [i, name] of Object.entries(seg.labels)) out[Number(i)] = name
-      setLabels(out)
-      return
-    }
-    const first = seg.frames[0]
-    if (!first) return
-    let live = true
-    load(first.mask).then((mask) => {
-      const off = document.createElement('canvas')
-      off.width = mask.width
-      off.height = mask.height
-      const ctx = off.getContext('2d', { willReadFrequently: true })!
-      ctx.imageSmoothingEnabled = false
-      ctx.drawImage(mask, 0, 0)
-      const data = ctx.getImageData(0, 0, off.width, off.height).data
-      const counts = new Map<number, number>()
-      for (let i = 0; i < data.length; i += 4) {
-        counts.set(data[i], (counts.get(data[i]) ?? 0) + 1)
-      }
-      const byShare = [...counts.entries()].sort((a, b) => b[1] - a[1])
-      const names = Object.keys(first.classes)
-      const out: string[] = []
-      byShare.slice(0, names.length).forEach(([idx], i) => { out[idx] = names[i] })
-      if (live) setLabels(out)
-    }).catch(() => {})
-    return () => { live = false }
-  }, [seg])
-  return labels
+  const out: string[] = []
+  for (const [i, name] of Object.entries(seg.labels ?? {})) out[Number(i)] = name
+  return out
 }
 
 export default function Segments({ seg }: { seg: Segmentation }) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
          deleteWalk, fetchSegmentation, patchMeta, postRerun, retryWalk,
-         serverSaid, STAGES, STAGE_OF } from './api'
+         serverSaid, thumb, STAGES, STAGE_OF } from './api'
 import type { Calibration, Decision, Face, Group, Job, Pending, Section,
               Segmentation, WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
@@ -129,7 +129,8 @@ function GroupRow({ group, tau, onDecision }: {
               title={`sharpness ${f.sharpness.toFixed(0)}`}
             >
               {n < 9 && <span className="key">{n + 1}</span>}
-              <img src={f.url} alt={`t=${f.tSec.toFixed(1)}s y${f.yaw}`} loading="lazy" />
+              <img src={thumb(f.url)} alt={`t=${f.tSec.toFixed(1)}s y${f.yaw}`}
+                   loading="lazy" />
               {candidates.length > 1 && (
                 <span className="sharp" aria-hidden>
                   <span style={{ width: `${Math.round(100 * rel)}%` }} />
@@ -242,7 +243,7 @@ function KeptGrid({ walk, onDecision }: {
               onClick={() => { setFocus(i); setOpen(isOpen ? null : g.anchor.idx) }}
               title={`pano ${f.panoIdx}, yaw ${f.yaw}`}
             >
-              <img src={f.url} alt={`pick t=${f.tSec}s`} loading="lazy" />
+              <img src={thumb(f.url)} alt={`pick t=${f.tSec}s`} loading="lazy" />
               {g.dropped && <span className="badge">dropped</span>}
               {!g.dropped && overridden && <span className="badge override">swapped</span>}
               {!g.dropped && !overridden && g.members.length > 0 && (

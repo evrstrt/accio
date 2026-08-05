@@ -71,3 +71,23 @@ def test_reselect_rejects_a_mismatched_manifest(tmp_path):
         csv.writer(f).writerow([9, "9.0", 45, "y045_00009.jpg", 1, "", ""])
     with pytest.raises(ValueError, match="5 rows"):
         reselect(out, PipelineParams())
+
+
+def test_a_reselect_drops_the_masks_it_invalidated(tmp_path):
+    """The masks belong to the frames the last run picked, and a new threshold
+    changes which those are. Leaving them made the masks page list frames that
+    were no longer kept and 404 on every one, while `segmented` counted them."""
+    from accio.jobs.pipeline import SEGMENT_FILE, read_segmentation
+    from accio.core.segment import MASK_DIR
+
+    out = make_walk(tmp_path)
+    (out / MASK_DIR).mkdir()
+    (out / MASK_DIR / "y045_00000.png").write_bytes(b"\x89PNG")
+    (out / SEGMENT_FILE).write_text(json.dumps(
+        {"model": "m", "labels": {"0": "wall"},
+         "classes": {"y045_00000.jpg": {"wall": 1.0}}}))
+
+    reselect(out, replace(PipelineParams(), dedup=DedupParams(tau=0.90)))
+
+    assert read_segmentation(out) == {}
+    assert not (out / MASK_DIR).exists()

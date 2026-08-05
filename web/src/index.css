@@ -543,6 +543,20 @@ select.insp-control { cursor: pointer; }
 
 .tile canvas { display: block; width: 100%; aspect-ratio: 1; }
 
+.overlay { position: relative; display: block; }
+
+/* a frame or mask that would not load. Without it a 404 leaves a blank white
+   square, indistinguishable from one that simply has not painted yet. */
+.overlay-bad {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--z-red);
+}
+
 .seg-toggle {
   display: inline-flex;
   align-items: center;

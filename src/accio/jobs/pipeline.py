@@ -473,6 +473,14 @@ def reselect(walk_out: Path, params: PipelineParams) -> dict:
     a dedup pass and a manifest rewrite rather than a stitch and a GPU pass.
     Face files and their names are untouched, which is what lets review
     decisions (keyed by name) survive the change.
+
+    Downstream is a different matter: the masks belong to the frames the last
+    run picked, and this changes which those are. Leaving them made the record
+    describe a set that no longer exists, so the masks page listed frames that
+    were no longer kept and 404ed on every one, `segmented` counted frames with
+    no mask behind it, and build_zip's `if mask.exists()` shipped a partly
+    annotated dataset without saying so. Clearing is honest and re-running
+    segment is cheap next to being wrong.
     """
     with np.load(walk_out / "embeddings.npz") as data:
         embeddings = data["embeddings"]
@@ -490,6 +498,7 @@ def reselect(walk_out: Path, params: PipelineParams) -> dict:
                     for r in rows], result,
                    [float(r["sharpness"]) for r in rows])
     save_params(walk_out, params)
+    clear_segmentation(walk_out)
     kept = len(result.kept)
     log_run(walk_out, params, calib, "select", len(rows), kept)
     return dict(faces=len(rows), anchors=kept, absorbed=len(rows) - kept,
