@@ -241,6 +241,7 @@ def run_segment(out: Path, names: list[str], params: PipelineParams,
     faces_dir = out / "faces"
 
     classes: dict[str, dict[str, float]] = {}
+    seen: dict[str, str] = {}
     for chunk in batched(names, EMBED_CHUNK):
         images = [cv2.cvtColor(cv2.imread(str(faces_dir / n)), cv2.COLOR_BGR2RGB)
                   for n in chunk]
@@ -248,9 +249,14 @@ def run_segment(out: Path, names: list[str], params: PipelineParams,
         for name, seg in zip(chunk, segs):
             segment_mod.write_mask(masks / f"{Path(name).stem}.png", seg)
             classes[name] = segment_mod.shares(seg, labels)
+            # the mask holds indices, so whatever reads it needs their names;
+            # only the ones that actually turned up are worth carrying
+            seen.update({str(i): labels[i] for i in np.unique(seg).tolist()
+                         if i in labels})
 
     (out / SEGMENT_FILE).write_text(json.dumps(
-        {"model": params.segment.model_name, "classes": classes}, indent=1))
+        {"model": params.segment.model_name, "labels": seen,
+         "classes": classes}, indent=1))
     return classes
 
 

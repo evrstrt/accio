@@ -490,6 +490,75 @@ select.insp-control { cursor: pointer; }
   opacity: 0.55;
 }
 
+/* --- masks: the segmenter's output over the frames it came from -------- */
+
+.tile canvas { display: block; width: 100%; aspect-ratio: 1; }
+
+.seg-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.seg-toggle input { margin: 0; }
+
+/* the class legend, each chip carrying the colour its outlines are drawn in */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chip i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.mix-name .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+
+/* one frame held open above the grid, with what it is made of beside it */
+.seg-open {
+  display: flex;
+  gap: 16px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--z-bg);
+  border: 1px solid var(--z-border);
+  border-radius: 4px;
+  box-shadow: var(--z-shadow);
+}
+
+.seg-open canvas {
+  flex: none;
+  width: 512px;
+  max-width: 55vw;
+  height: auto;
+  border: 1px solid var(--z-wire);
+  border-radius: 4px;
+}
+
+.seg-open-side { flex: 1; min-width: 0; }
+
+.seg-open-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+}
+
 /* --- right-click menu on a walk ---------------------------------------- */
 
 .ctx {

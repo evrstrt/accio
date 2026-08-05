@@ -176,6 +176,26 @@ export type Calibration = {
 export const fetchCalibration = (walkId: string) =>
   req<Calibration>(`/api/walks/${encodeURIComponent(walkId)}/calibration`)
 
+// the segmenter's output, per kept frame: the mask and what it is made of
+export type SegFrame = {
+  face: string
+  tSec: number
+  yaw: number
+  url: string
+  mask: string
+  classes: Record<string, number>
+}
+
+export type Segmentation = {
+  model: string
+  labels: Record<string, string>   // mask index -> class name
+  frames: SegFrame[]
+  classMix: { name: string; share: number }[]
+}
+
+export const fetchSegmentation = (walkId: string) =>
+  req<Segmentation>(`/api/walks/${encodeURIComponent(walkId)}/segmentation`)
+
 export const fetchJobs = () => req<Job[]>('/api/jobs')
 
 // Settings edited but not yet applied, by the section of the pipeline params

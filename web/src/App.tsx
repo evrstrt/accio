@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
-         deleteWalk, patchMeta, postRerun, retryWalk, STAGES,
-         STAGE_OF } from './api'
+         deleteWalk, fetchSegmentation, patchMeta, postRerun, retryWalk,
+         STAGES, STAGE_OF } from './api'
 import type { Calibration, Decision, Face, Group, Job, Pending, Section,
-              WalkDetail, WalkSummary } from './api'
+              Segmentation, WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
 import Ingest from './Ingest'
 import Loader from './Loader'
 import Inspector, { backboneLabel } from './Inspector'
 import Pipeline, { rerunLabel } from './Pipeline'
+import Segments from './Segments'
 
 // A member that only just cleared the threshold is the one worth a second
 // look: it merged, but barely. The margin is relative to tau, which is per
@@ -280,7 +281,8 @@ export default function App() {
   const [walk, setWalk] = useState<WalkDetail | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [ingesting, setIngesting] = useState(false)
-  const [view, setView] = useState<'pipeline' | 'review'>('pipeline')
+  const [view, setView] = useState<'pipeline' | 'review' | 'masks'>('pipeline')
+  const [seg, setSeg] = useState<Segmentation | null>(null)
   const [inspect, setInspect] = useState<string | null>(null)
   // settings edited but not yet applied, Railway style: the canvas marks what
   // they would re-run and nothing happens until Apply
@@ -329,6 +331,7 @@ export default function App() {
     setCalib(null)
     setShowCalib(false)
     setUnreachable(null)
+    setSeg(null)
     // a walk that will not load is not a walk that is still loading: without
     // this the canvas sits on "Loading…" forever and never says why
     fetchWalk(selected)
@@ -339,6 +342,8 @@ export default function App() {
       })
     // measured on every run, so only walks made before it exists lack a record
     fetchCalibration(selected).then(setCalib).catch(() => setCalib(null))
+    // 404s until the Segment stage has been turned on for this walk
+    fetchSegmentation(selected).then(setSeg).catch(() => setSeg(null))
   }, [selected])
 
   useEffect(() => {
@@ -359,7 +364,8 @@ export default function App() {
   const reload = useCallback((id: string) =>
     Promise.all([fetchWalk(id), fetchWalks()])
       .then(([w, ws]) => { setWalk(w); setWalks(ws) })
-      .then(() => fetchCalibration(id).then(setCalib).catch(() => setCalib(null))),
+      .then(() => fetchCalibration(id).then(setCalib).catch(() => setCalib(null)))
+      .then(() => fetchSegmentation(id).then(setSeg).catch(() => setSeg(null))),
     [])
 
   // Poll jobs always, fast while something is in flight and slowly otherwise:
@@ -467,13 +473,13 @@ export default function App() {
         <div className="crumb">
           <span className="crumb-dim">accio</span>
           <span className="sep">/</span>
-          {view === 'review' && !ingesting ? (
+          {view !== 'pipeline' && !ingesting ? (
             <>
               <button className="crumb-link" onClick={() => setView('pipeline')}>
                 {selected}
               </button>
               <span className="sep">/</span>
-              <b>Review</b>
+              <b>{view === 'masks' ? 'Masks' : 'Review'}</b>
             </>
           ) : (
             <b>{ingesting ? 'New Walk' : selected ?? 'No Walk'}</b>
@@ -488,6 +494,14 @@ export default function App() {
               >
                 Review
               </button>
+              {seg && (
+                <button
+                  className={`top-btn${view === 'masks' ? ' active' : ''}`}
+                  onClick={() => setView(view === 'masks' ? 'pipeline' : 'masks')}
+                >
+                  Masks
+                </button>
+              )}
               <a className="top-btn" href={exportUrl} download>Export</a>
             </>
           )}
@@ -632,6 +646,9 @@ export default function App() {
             <Pipeline walk={walk} job={job} selected={inspect}
                       dirtyFrom={dirtyFrom} onSelect={setInspect} />
           </>
+        )}
+        {!error && !ingesting && walk && seg && view === 'masks' && (
+          <Segments seg={seg} />
         )}
         {!error && !ingesting && walk && view === 'review' && (
           <>

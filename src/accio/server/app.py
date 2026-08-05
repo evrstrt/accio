@@ -586,6 +586,31 @@ def export_walk(walk_id: str) -> Response:
         "Content-Disposition": f'attachment; filename="{walk_id}.zip"'})
 
 
+@app.get("/api/walks/{walk_id}/segmentation")
+def segmentation(walk_id: str) -> dict:
+    """Every kept frame's class mix, with the mask each one has."""
+    wdir = walk_dir(walk_id)
+    seg = pipeline.read_segmentation(wdir)
+    if not seg:
+        raise HTTPException(404, f"{walk_id} has not been segmented")
+    rows = read_manifest(walk_id)
+    t_of = {r["path"]: (float(r["t_sec"]), int(r["yaw"])) for r in rows}
+    classes = seg.get("classes", {})
+    frames = [{
+        "face": name,
+        "tSec": t_of.get(name, (0.0, 0))[0],
+        "yaw": t_of.get(name, (0.0, 0))[1],
+        "url": f"/api/walks/{walk_id}/faces/{name}",
+        "mask": f"/api/walks/{walk_id}/masks/{Path(name).stem}.png",
+        "classes": shares,
+    } for name, shares in classes.items()]
+    frames.sort(key=lambda f: (f["tSec"], f["yaw"]))
+    return {"model": seg.get("model", ""), "frames": frames,
+            # index -> name, so a reader of the masks knows what a pixel means
+            "labels": seg.get("labels", {}),
+            "classMix": top_classes(classes)}
+
+
 @app.get("/api/walks/{walk_id}/masks/{name}")
 def mask_image(walk_id: str, name: str) -> FileResponse:
     """The mask as written: class indices, so it is near-black on screen. The
