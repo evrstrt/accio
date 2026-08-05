@@ -104,30 +104,68 @@ def read_manifest(walk_id: str) -> list[dict]:
         return list(csv.DictReader(f))
 
 
+# walk id -> (manifest mtime, face count, anchor names)
+_summary: dict[str, tuple[int, int, set[str]]] = {}
+
+
+def walk_summary(walk_id: str) -> tuple[int, set[str]]:
+    """How many faces a walk has and which of them are anchors.
+
+    Cached on the manifest's mtime. The list endpoint is polled and touches
+    every walk, so parsing every manifest each time made it cost every frame
+    of every walk per request: benchmarked at 1.8 s of CPU at 500 walks, which
+    several reviewers polling would never catch up with. The manifest is
+    written atomically now, so its mtime changes exactly when the answer does
+    and never mid-write.
+    """
+    path = walk_dir(walk_id) / "manifest.csv"
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        _summary.pop(walk_id, None)
+        return 0, set()
+    hit = _summary.get(walk_id)
+    if hit and hit[0] == stamp:
+        return hit[1], hit[2]
+    rows = read_manifest(walk_id)
+    anchors = {r["path"] for r in rows if r["kept"] == "1"}
+    _summary[walk_id] = (stamp, len(rows), anchors)
+    return len(rows), anchors
+
+
 @app.get("/api/walks")
 def walks() -> list[dict]:
     out = []
     for d in sorted(WALKS_ROOT.iterdir()) if WALKS_ROOT.exists() else []:
         if not d.is_dir():
             continue
-        rows = read_manifest(d.name)
+        faces, anchors = walk_summary(d.name)
         state = db.effective_state(conn(), d.name)
-        n_dropped, _ = export.review_counts(rows, state)
+        # decisions on faces that are no longer anchors stay in the log but do
+        # not count against this run, same rule as export.review_counts
+        dropped = sum(1 for a, s in state.items()
+                      if a in anchors and s["dropped"])
         out.append({
             "id": d.name,
-            "faces": len(rows),
-            "kept": sum(r["kept"] == "1" for r in rows) - n_dropped,
+            "faces": faces,
+            "kept": len(anchors) - dropped,
             "meta": db.walk_meta(conn(), d.name),
             # a walk with no manifest never finished: it is listed so it can be
             # seen and removed, not because there is anything to review
-            "ready": bool(rows),
+            "ready": bool(faces),
             "error": pipeline.read_failure(d),
         })
     return out
 
 
 @app.post("/api/ingest")
-async def ingest(
+# Deliberately `def`, not `async def`. The body copies gigabytes with
+# shutil.copyfileobj and then shells out to ffprobe, none of which yields, so
+# on the event loop it stopped the whole server for the length of an upload:
+# no job polling, no images, a second operator's upload stalled behind it, and
+# it read as a crash. FastAPI runs a plain def in the threadpool, where a
+# blocking call only costs its own thread, and UploadFile works the same there.
+def ingest(
     files: list[UploadFile] = File([]),
     site: str = Form(""),
     building: str = Form(""),

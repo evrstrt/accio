@@ -15,6 +15,7 @@ back as well as written.
 import csv
 import json
 import shutil
+import time
 from dataclasses import asdict, replace
 from datetime import datetime
 from itertools import batched
@@ -43,11 +44,35 @@ def face_name(pano_idx: int, yaw: int) -> str:
     return f"y{yaw:03d}_{pano_idx:05d}.jpg"
 
 
+class Clock:
+    """Wall clock per stage, wrapped around the progress callback.
+
+    Nothing recorded timing before this, so every capacity question had to be
+    answered by reading file mtimes off disk and guessing which write belonged
+    to which stage. The run record already says what a configuration produced;
+    what it cost is the other half, and it is the half that decides whether a
+    backbone or a segmenter is affordable on a real walk.
+    """
+
+    def __init__(self, say):
+        self._say = say
+        self.seconds: dict[str, float] = {}
+        self._started: dict[str, float] = {}
+
+    def __call__(self, stage: str, status: str, **counts) -> None:
+        now = time.monotonic()
+        if status == "running":
+            self._started[stage] = now
+        elif status == "done" and stage in self._started:
+            self.seconds[stage] = round(now - self._started.pop(stage), 1)
+        self._say(stage, status, **counts)
+
+
 def run_walk(video: Path, out_root: Path, params: PipelineParams,
              embedder: Embedder, progress=None, segmenter=None) -> dict:
     """progress(stage, status, **counts) is called around every stage, so the
     caller can show the run advancing instead of a single opaque wait."""
-    say = progress or (lambda *a, **k: None)
+    say = Clock(progress or (lambda *a, **k: None))
     out = out_root / video.stem
     out.mkdir(parents=True, exist_ok=True)
 
@@ -81,7 +106,7 @@ def rerun(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     canvas shows the same blocks either way and the ones that were reused are
     visibly not running.
     """
-    say = progress or (lambda *a, **k: None)
+    say = Clock(progress or (lambda *a, **k: None))
     if first not in STAGES:
         raise ValueError(f"unknown stage {first!r}")
     if first == "stitch":
@@ -163,7 +188,8 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     elif start <= STAGES.index("segment"):
         clear_segmentation(out)
 
-    log_run(out, params, calib, first, len(records), kept)
+    log_run(out, params, calib, first, len(records), kept,
+            getattr(say, "seconds", {}))
     clear_failure(out)     # this walk ran through; whatever broke before is past
     return dict(walk=out.name, faces=len(records), anchors=kept,
                 absorbed=len(records) - kept, tau=params.dedup.tau,
@@ -332,7 +358,8 @@ def read_failure(out: Path) -> dict | None:
 
 
 def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,
-            faces: int, anchors: int) -> None:
+            faces: int, anchors: int,
+            seconds: dict[str, float] | None = None) -> None:
     """Append what this configuration produced.
 
     Every run already knows its backbone, its threshold, what identical frames
@@ -358,6 +385,8 @@ def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,
         "faces": faces,
         "anchors": anchors,
         "absorbed": faces - anchors,
+        # what it cost, per stage: the other half of what a run produced
+        "seconds": seconds or {},
     }
     with open(out / RUNS_FILE, "a") as f:
         f.write(json.dumps(row) + "\n")

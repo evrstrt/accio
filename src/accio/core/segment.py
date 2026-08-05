@@ -38,6 +38,14 @@ MIN_MARGIN = 0.05
 # Grounding DINO's text side is a fixed 256 positions; a longer prompt runs off
 # the end and those classes would silently never score
 MAX_TEXT = 256
+# frames per forward pass. Small because these are 1024 square and the heads
+# are large; the point is that it is more than one, which is what it was.
+SEG_BATCH = 4
+
+
+def _chunks(xs, n):
+    for i in range(0, len(xs), n):
+        yield xs[i:i + n]
 
 
 @dataclass(frozen=True)
@@ -91,8 +99,9 @@ class SemanticSegmenter:
     is loaded. Weights load lazily; importing this module stays cheap.
     """
 
-    def __init__(self, params: SegmentParams):
+    def __init__(self, params: SegmentParams, batch: int = SEG_BATCH):
         self.params = params
+        self.batch = batch
         self._model = None
 
     def _load(self):
@@ -122,15 +131,19 @@ class SemanticSegmenter:
         if self._model is None:
             self._load()
         out = []
-        for image in images:
-            batch = self._proc(images=image, return_tensors="pt", **self._task)
+        # One forward per batch, not per image. The caller already gathers 64
+        # frames and used to hand them to a loop, so the batching was cosmetic
+        # and every frame paid the full launch and post-processing overhead.
+        for chunk in _chunks(images, self.batch):
+            task = {"task_inputs": ["semantic"] * len(chunk)} if self._task else {}
+            batch = self._proc(images=list(chunk), return_tensors="pt", **task)
             with self.torch.no_grad():
                 pred = self._model(**to_device(batch, self._device))
-            # the mask has to line up with the frame it annotates, so the
-            # processor scales it back to the frame's own size
-            seg = self._proc.post_process_semantic_segmentation(
-                pred, target_sizes=[image.shape[:2]])[0]
-            out.append(seg.cpu().numpy().astype(np.int32))
+            # each mask has to line up with the frame it annotates, so the
+            # processor scales them back to their own sizes
+            segs = self._proc.post_process_semantic_segmentation(
+                pred, target_sizes=[im.shape[:2] for im in chunk])
+            out += [s.cpu().numpy().astype(np.int32) for s in segs]
         return np.stack(out), self._labels
 
 
