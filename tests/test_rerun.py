@@ -55,7 +55,7 @@ class StubEmbedder:
 def walk(tmp_path, monkeypatch):
     """An ingested walk on disk, with Docker and the SDK stubbed out."""
     monkeypatch.setattr(extract, "stitch", fake_stitch)
-    monkeypatch.setattr(extract, "probe_fps_nframes", lambda v: (29.97, 300))
+    monkeypatch.setattr(extract, "probe", lambda v: (29.97, 300, 3840, 1920))
     monkeypatch.setattr(extract, "lens_files", lambda v: [v])
     monkeypatch.setattr(pipeline, "calibrate", lambda *a, **k: CALIB)
     video = tmp_path / "walk.insv"

@@ -50,17 +50,36 @@ class DockerNotFound(RuntimeError):
     pass
 
 
-def probe_fps_nframes(video: Path) -> tuple[float, int]:
+def probe(video: Path) -> tuple[float, int, int, int]:
+    """fps, frames, width, height of the raw recording."""
     if shutil.which("ffprobe") is None:
         raise FfmpegNotFound("ffprobe not on PATH; install it (brew install ffmpeg)")
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=avg_frame_rate:format=duration",
+         "-show_entries", "stream=avg_frame_rate,width,height:format=duration",
          "-of", "csv=p=0", str(video)],
         capture_output=True, text=True, check=True).stdout.split()
-    num, den = out[0].split("/")
+    width, height, rate = out[0].split(",")
+    num, den = rate.split("/")
     fps = float(num) / float(den)
-    return fps, int(float(out[1]) * fps)
+    return fps, int(float(out[1]) * fps), int(width), int(height)
+
+
+def probe_fps_nframes(video: Path) -> tuple[float, int]:
+    fps, frames, _w, _h = probe(video)
+    return fps, frames
+
+
+def lenses_in_frame(width: int, height: int) -> int:
+    """How many fisheye circles a frame holds.
+
+    Both packings are dual-fisheye; they differ in how they are stored. Two
+    circles side by side make a 2:1 frame (3840x1920), one circle per file
+    makes a square one (2880x2880). A square frame is therefore half a
+    recording, and stitching it alone stretches the front hemisphere over the
+    whole sphere: the back of every panorama comes out a smear.
+    """
+    return 2 if width >= height * 1.5 else 1
 
 
 def frame_numbers(native_fps: float, nframes: int, target_fps: float) -> list[int]:

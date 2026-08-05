@@ -47,6 +47,8 @@ export type WalkSummary = {
 export type Stages = {
   frames: number
   seconds: number
+  source: string         // the raw frame size, e.g. "3840x1920"
+  lenses: number         // fisheye circles the stitch actually had
   panos: number
   sharp: number
   faces: number

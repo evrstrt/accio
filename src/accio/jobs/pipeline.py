@@ -51,10 +51,14 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
 
     # what the camera actually recorded, kept next to the derived frames: it is
     # the denominator the rest of the funnel is a fraction of
-    native_fps, frames = extract.probe_fps_nframes(video)
+    native_fps, frames, width, height = extract.probe(video)
+    files = extract.lens_files(video)
     (out / "source.json").write_text(json.dumps(
         {"frames": frames, "fps": native_fps, "seconds": round(frames / native_fps, 1),
-         "files": [p.name for p in extract.lens_files(video)]}))
+         "files": [p.name for p in files], "width": width, "height": height,
+         # both packings are dual-fisheye; the count says whether this walk
+         # actually had both circles to stitch from
+         "lenses": extract.lenses_in_frame(width, height) * len(files)}))
     say("video", "done", frames=frames, seconds=round(frames / native_fps))
 
     say("stitch", "running")

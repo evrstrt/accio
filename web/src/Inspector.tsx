@@ -120,7 +120,13 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
       <>
         <Group title="source">
           <Row label="File"><Val>{meta?.videoFile ?? walk.id}</Val></Row>
-          <Row label="Format"><Val>dual-fisheye .insv</Val></Row>
+          <Row label="Frame"><Val>{s.source || 'unknown'}</Val></Row>
+          <Row label="Lenses">
+            {/* both packings are dual-fisheye: two circles in one 2:1 frame,
+                or one square frame per lens. One circle is half a sphere. */}
+            <Val>{s.lenses === 2 ? 'fisheye ×2' : s.lenses === 1
+              ? 'fisheye ×1, incomplete' : 'unknown'}</Val>
+          </Row>
           <Row label="Footage"><Val>{s.frames.toLocaleString()} frames</Val></Row>
         </Group>
         <Group title="capture metadata">
@@ -134,6 +140,13 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
           </Row>
           {text('shotDate', 'Shot date', 'date')}
         </Group>
+        {s.lenses === 1 && (
+          <div className="insp-warn">
+            This walk was stitched from one lens, so the back of every panorama
+            is the front smeared across it. Upload the _10_ file with the _00_
+            and re-ingest.
+          </div>
+        )}
         <div className="insp-note">
           Stamped into the EXIF of every frame in the export, so it travels with
           the images rather than living only here.

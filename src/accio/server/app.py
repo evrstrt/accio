@@ -15,6 +15,7 @@ import csv
 import json
 import os
 import shutil
+import tempfile
 import threading
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -130,14 +131,37 @@ async def ingest(
     if any("_10_" in n for n in names) and not any("_00_" in n for n in names):
         raise HTTPException(422, "that is the back lens only; upload the _00_ "
                                  "file alongside it")
-    VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-    saved = []
-    for up in files:
-        dst = VIDEO_DIR / Path(up.filename).name
-        with open(dst, "wb") as f:
-            shutil.copyfileobj(up.file, f)
-        saved.append(dst)
-    video = extract.front_lens(saved)
+    # Land the upload beside the store, not in it, and only move it across
+    # once it is known to be stitchable. Writing first and cleaning up after
+    # would delete whatever it overwrote on the way in.
+    staging = VIDEO_DIR / ".incoming"
+    staging.mkdir(parents=True, exist_ok=True)
+    hold = Path(tempfile.mkdtemp(dir=staging))
+    try:
+        saved = []
+        for up in files:
+            dst = hold / Path(up.filename).name
+            with open(dst, "wb") as f:
+                shutil.copyfileobj(up.file, f)
+            saved.append(dst)
+        video = extract.front_lens(saved)
+
+        # The other half of the lone-_10_ mistake: a square frame is one
+        # fisheye circle, so a _00_ on its own is half a sphere. Stitching it
+        # anyway smears the front hemisphere across the back, which reads as a
+        # bad stitch rather than the missing file it is.
+        _fps, _n, width, height = extract.probe(video)
+        if extract.lenses_in_frame(width, height) == 1 and len(saved) < 2:
+            raise HTTPException(422, f"{video.name} is {width}x{height}: one lens "
+                                     "of a two-file recording. Upload its _10_ "
+                                     "file alongside it.")
+        video = shutil.move(str(video), VIDEO_DIR / video.name)
+        for p in saved:
+            if p.exists():
+                shutil.move(str(p), VIDEO_DIR / p.name)
+        video = Path(video)
+    finally:
+        shutil.rmtree(hold, ignore_errors=True)
 
     db.save_walk_meta(conn(), video.stem, video.name, site=site,
                       building=building, stage=stage, operator=operator,
@@ -203,6 +227,8 @@ def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
     return {
         "frames": src.get("frames", 0),
         "seconds": src.get("seconds", 0),
+        "source": f"{src['width']}x{src['height']}" if "width" in src else "",
+        "lenses": src.get("lenses", 0),
         "panos": len(list(pano_dir.glob(f"{extract.PANO_PREFIX}*{extract.PANO_EXT}"))),
         "sharp": len({r["pano_idx"] for r in rows}),
         "faces": len(rows),

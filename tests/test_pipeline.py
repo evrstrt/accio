@@ -48,7 +48,7 @@ class StubEmbedder:
 
 def test_run_walk_manifest_and_embeddings_align(tmp_path, monkeypatch):
     monkeypatch.setattr(extract, "stitch", fake_stitch)
-    monkeypatch.setattr(extract, "probe_fps_nframes", lambda v: (30.0, 300))
+    monkeypatch.setattr(extract, "probe", lambda v: (30.0, 300, 3840, 1920))
     monkeypatch.setattr(extract, "lens_files", lambda v: [v])
     embedder = StubEmbedder()
     expected = embedder.rows.copy()
