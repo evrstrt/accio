@@ -127,6 +127,16 @@ async def ingest(
     # as two uploads; the app owns its copy of the originals.
     if not files or not files[0].filename:
         raise HTTPException(422, "upload the .insv file(s)")
+    # The capture metadata is the whole point of ingesting through the app
+    # rather than running the pipeline by hand: a frame with no site on it is
+    # not a labelling candidate, it is an orphan. The date and time are absent
+    # from this list because the file answers them.
+    need = {"site": site, "building": building, "floor": floor, "stage": stage,
+            "operator": operator,
+            "mount height": "" if mount_height_cm is None else "set"}
+    blank = [k for k, v in need.items() if not str(v).strip()]
+    if blank:
+        raise HTTPException(422, f"still needed: {', '.join(blank)}")
     # a _10_ on its own is the back lens of a dual-file recording: the SDK
     # stitches nothing from it, so say so now rather than after the upload
     names = [Path(f.filename or "").name for f in files]

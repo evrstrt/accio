@@ -1028,6 +1028,11 @@ select.insp-control { cursor: pointer; }
 .field:focus { border-color: var(--z-blue-border); }
 .field::placeholder { color: var(--z-muted); }
 
+/* still empty and still wanted: marked rather than shouted at, and it clears
+   the moment something is typed */
+.field.needed { border-color: rgba(228, 0, 20, 0.4); }
+.field.needed:focus { border-color: var(--z-blue-border); }
+
 .meta-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

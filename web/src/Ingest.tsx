@@ -8,13 +8,16 @@ import type { FrameSize } from './insv'
 // the file cannot answer is asked: the camera model and the moment of the
 // walk are read out of the .insv at ingest. A value typed here still wins,
 // for a walk uploaded long after it was shot off a camera clock nobody set.
+// `need` marks what nobody else can supply. The date and time are not on that
+// list because the file already answers them; typing them is the exception.
 const FIELDS = [
-  { name: 'site', label: 'Site', placeholder: 'GCMR' },
-  { name: 'building', label: 'Building', placeholder: 'tower 2' },
-  { name: 'floor', label: 'Floor', placeholder: '4, or basement' },
-  { name: 'stage', label: 'Stage', placeholder: 'bare-rcc' },
-  { name: 'operator', label: 'Operator', placeholder: 'who walked it' },
-  { name: 'mount_height_cm', label: 'Mount Height (cm)', placeholder: '175', type: 'number' },
+  { name: 'site', label: 'Site', placeholder: 'GCMR', need: true },
+  { name: 'building', label: 'Building', placeholder: 'tower 2', need: true },
+  { name: 'floor', label: 'Floor', placeholder: '4, or basement', need: true },
+  { name: 'stage', label: 'Stage', placeholder: 'bare-rcc', need: true },
+  { name: 'operator', label: 'Operator', placeholder: 'who walked it', need: true },
+  { name: 'mount_height_cm', label: 'Mount Height (cm)', placeholder: '175',
+    type: 'number', need: true },
   { name: 'shot_date', label: 'Shot Date', placeholder: '', type: 'date' },
   { name: 'shot_time', label: 'Shot Time', placeholder: '', type: 'time' },
 ] as const
@@ -39,7 +42,18 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
     return () => { live = false }
   }, [files])
 
+  // Uncontrolled inputs, read back on every keystroke: the form is the state,
+  // and mirroring eight fields into React buys nothing but drift.
+  const [missing, setMissing] = useState<string[]>([])
+  const recheck = () => {
+    const fd = new FormData(formRef.current!)
+    setMissing(FIELDS.filter((f) => 'need' in f && f.need
+      && !String(fd.get(f.name) ?? '').trim()).map((f) => f.label))
+  }
+  useEffect(recheck, [])
+
   const blocked = whyNotReady(files, sizes)
+    || (missing.length ? `Still needed: ${missing.join(', ')}` : '')
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -61,7 +75,7 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
   const gb = files.reduce((n, f) => n + f.size, 0) / 1e9
 
   return (
-    <form ref={formRef} className="ingest" onSubmit={submit}>
+    <form ref={formRef} className="ingest" onSubmit={submit} onInput={recheck}>
       <div className="section-title">New Walk</div>
       <div
         className={`dropzone${dragOver ? ' over' : ''}${files.length ? ' has-file' : ''}`}
@@ -92,7 +106,8 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
           <label key={f.name} className="meta-field">
             <span>{f.label}</span>
             <input
-              className="field"
+              className={`field${'need' in f && f.need
+                && missing.includes(f.label) ? ' needed' : ''}`}
               name={f.name}
               placeholder={f.placeholder}
               type={'type' in f ? f.type : 'text'}
