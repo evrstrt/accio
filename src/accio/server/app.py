@@ -320,6 +320,37 @@ def walk_video(walk_id: str) -> Path:
     return video
 
 
+# the API speaks camelCase, the table snake_case
+META_COLUMNS = {"site": "site", "building": "building", "stage": "stage",
+                "operator": "operator", "mountHeightCm": "mount_height_cm",
+                "shotDate": "shot_date"}
+
+
+class MetaPatch(BaseModel):
+    """Capture metadata. Absent means unchanged; "" means cleared."""
+    site: str | None = Field(None, max_length=200)
+    building: str | None = Field(None, max_length=200)
+    stage: str | None = Field(None, max_length=200)
+    operator: str | None = Field(None, max_length=200)
+    mountHeightCm: int | None = Field(None, ge=0, le=1000)
+    shotDate: str | None = Field(None, max_length=10)
+
+
+@app.patch("/api/walks/{walk_id}/meta")
+def patch_meta(walk_id: str, m: MetaPatch) -> dict:
+    """Correct a walk's capture metadata. Nothing derived depends on it, so
+    this changes a row and no frames."""
+    walk_dir(walk_id)
+    fields = {META_COLUMNS[k]: v for k, v in m.model_dump().items()
+              if v is not None}
+    if fields:
+        try:
+            db.update_walk_meta(conn(), walk_id, **fields)
+        except KeyError:
+            raise HTTPException(404, f"no metadata recorded for {walk_id}")
+    return db.walk_meta(conn(), walk_id) or {}
+
+
 class Decision(BaseModel):
     anchorIdx: int
     action: str  # 'pick' | 'drop' | 'restore'
@@ -375,8 +406,10 @@ def export_walk(walk_id: str) -> Response:
     meta = db.walk_meta(conn(), walk_id) or {}
     npz = wdir / "embeddings.npz"
     model = str(np.load(npz)["model"]) if npz.exists() else ""
+    # the settings this walk was built with, not today's defaults: the EXIF is
+    # the provenance record, and a wrong one is worse than none
     data = export.build_zip(walk_id, wdir, rows, state, meta, model,
-                            PipelineParams())
+                            walk_params(walk_id))
     return Response(data, media_type="application/zip", headers={
         "Content-Disposition": f'attachment; filename="{walk_id}.zip"'})
 

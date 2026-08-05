@@ -1,4 +1,8 @@
-from accio.store.db import connect, effective_state, log_decision, override_log
+import pytest
+
+from accio.store.db import (connect, effective_state, log_decision,
+                            override_log, save_walk_meta, update_walk_meta,
+                            walk_meta)
 
 
 def make_conn(tmp_path):
@@ -45,7 +49,6 @@ def test_walks_are_isolated(tmp_path):
 
 def test_walk_meta_roundtrip_and_upsert(tmp_path):
     conn = make_conn(tmp_path)
-    from accio.store.db import save_walk_meta, walk_meta
     save_walk_meta(conn, "w1", "w1.insv", site="GCMR", building="T2",
                    stage="bare-rcc", operator="ram", mount_height_cm=178,
                    shot_date="2026-07-01")
@@ -54,3 +57,44 @@ def test_walk_meta_roundtrip_and_upsert(tmp_path):
     save_walk_meta(conn, "w1", "w1.insv", building="T3")
     assert walk_meta(conn, "w1")["building"] == "T3"
     assert walk_meta(conn, "nope") is None
+
+
+def seeded(tmp_path):
+    conn = make_conn(tmp_path)
+    save_walk_meta(conn, "w1", "w1.insv", site="GCMR", building="T2",
+                   stage="bare-rcc", operator="ram", mount_height_cm=178,
+                   shot_date="2026-07-01")
+    return conn
+
+
+def test_updating_one_field_leaves_the_others_alone(tmp_path):
+    conn = seeded(tmp_path)
+    update_walk_meta(conn, "w1", site="ASHV")
+    m = walk_meta(conn, "w1")
+    assert m["site"] == "ASHV"
+    assert (m["building"], m["operator"], m["mountHeightCm"]) == ("T2", "ram", 178)
+    assert m["videoFile"] == "w1.insv"     # not something the edit can reach
+
+
+def test_a_field_can_be_cleared(tmp_path):
+    conn = seeded(tmp_path)
+    update_walk_meta(conn, "w1", operator="")
+    assert walk_meta(conn, "w1")["operator"] == ""
+
+
+def test_updating_nothing_is_not_an_error(tmp_path):
+    conn = seeded(tmp_path)
+    update_walk_meta(conn, "w1")
+    assert walk_meta(conn, "w1")["site"] == "GCMR"
+
+
+def test_updating_a_walk_that_is_not_there_says_so(tmp_path):
+    conn = seeded(tmp_path)
+    with pytest.raises(KeyError):
+        update_walk_meta(conn, "nope", site="X")
+
+
+def test_unknown_fields_are_refused_rather_than_ignored(tmp_path):
+    conn = seeded(tmp_path)
+    with pytest.raises(ValueError, match="video_file"):
+        update_walk_meta(conn, "w1", video_file="elsewhere.insv")

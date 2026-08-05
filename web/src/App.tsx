@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
-         postRerun, STAGES, STAGE_OF } from './api'
+         patchMeta, postRerun, STAGES, STAGE_OF } from './api'
 import type { Calibration, Decision, Face, Group, Job, Pending, Section,
               WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
@@ -12,13 +12,15 @@ import Pipeline, { rerunLabel } from './Pipeline'
 const BORDERLINE = 0.955
 
 /** Fold one edit into the staged set. A value put back to what the walk
-    actually ran is not a change, so it un-stages instead of piling up. */
-function stage(pending: Pending, spec: Record<string, any>,
+    actually has is not a change, so it un-stages instead of piling up.
+    `saved` is that section as it stands: the walk's params, or its metadata. */
+function stage(pending: Pending, saved: Record<string, any>,
                section: Section, key: string, value: unknown): Pending {
   const next: Record<string, any> = { ...pending }
   const sec = { ...(next[section] ?? {}) }
-  const same = JSON.stringify(spec[section]?.[key]) === JSON.stringify(value)
-  if (same) delete sec[key]
+  // an empty field and a field that was never set are the same thing
+  const was = saved?.[key] ?? (typeof value === 'string' ? '' : undefined)
+  if (JSON.stringify(was) === JSON.stringify(value)) delete sec[key]
   else sec[key] = value
   if (Object.keys(sec).length === 0) delete next[section]
   else next[section] = sec
@@ -335,30 +337,39 @@ export default function App() {
   const edited = Object.values(pending).reduce(
     (n, sec) => n + Object.keys(sec ?? {}).length, 0)
   const dirtyFrom = STAGES.find((s) => Object.keys(pending).some(
-    (k) => STAGE_OF[k as Section] === s)) ?? null
+    (k) => STAGE_OF[k] === s)) ?? null
+  // metadata is staged the same way but re-runs nothing, so the pill says what
+  // Apply would do rather than which stages it would cost
+  const { meta: metaEdit, ...settings } = pending
+  const willRun = Object.keys(settings).length > 0
 
   const onEdit = useCallback((section: Section, key: string, value: unknown) => {
     if (!walk) return
-    setPending((prev) => stage(prev, walk.pipeline, section, key, value))
+    const saved = section === 'meta'
+      ? (walk.meta ?? {}) : (walk.pipeline as Record<string, any>)[section]
+    setPending((prev) => stage(prev, saved, section, key, value))
   }, [walk])
 
   const apply = useCallback(() => {
     if (!selected) return
     setApplying(true)
     setRefused(null)
-    postRerun(selected, pending)
+    // metadata first: it is a row update either way, and doing it before a
+    // re-run means the reload afterwards already carries it
+    Promise.resolve(metaEdit && patchMeta(selected, metaEdit))
+      .then(() => willRun ? postRerun(selected, settings) : null)
       .then((res) => {
         setPending({})
         // a re-select is already done; anything heavier is now a job, and the
         // canvas follows it stage by stage until it lands
-        if (res.id != null) return fetchJobs().then(setJobs)
+        if (res?.id != null) return fetchJobs().then(setJobs)
         return reload(selected)
       })
       // a refused change keeps the edits staged: the pill says why and the
       // walk on screen is still the one on disk
       .catch((e) => setRefused(e instanceof Error ? e.message : String(e)))
       .finally(() => setApplying(false))
-  }, [selected, pending, reload])
+  }, [selected, metaEdit, settings, willRun, reload])
 
   const onDecision = useCallback((d: Decision) => {
     if (!selected) return
@@ -463,14 +474,16 @@ export default function App() {
         )}
         {!error && !ingesting && (walk || running) && view === 'pipeline' && (
           <>
-            {dirtyFrom && (
+            {edited > 0 && (
               <div className={`pill${refused ? ' refused' : ''}`}>
                 <span className="pill-text">
                   {refused ?? (
                     <>
                       {edited} change{edited === 1 ? '' : 's'}{' '}
-                      <span className="pill-dim">·</span> re-runs{' '}
-                      {rerunLabel(dirtyFrom)}
+                      <span className="pill-dim">·</span>{' '}
+                      {dirtyFrom
+                        ? <>re-runs {rerunLabel(dirtyFrom)}</>
+                        : 'saves metadata'}
                     </>
                   )}
                 </span>

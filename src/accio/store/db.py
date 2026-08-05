@@ -80,6 +80,26 @@ def save_walk_meta(conn: sqlite3.Connection, walk_id: str, video_file: str,
     conn.commit()
 
 
+def update_walk_meta(conn: sqlite3.Connection, walk_id: str, **fields) -> None:
+    """Change some of the capture metadata on a walk that already exists.
+
+    Metadata is the one thing about a walk that is corrected rather than
+    re-derived: nothing downstream is computed from it, it is copied into the
+    EXIF at export. So it updates in place instead of re-running anything.
+    """
+    unknown = set(fields) - set(WALK_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown walk fields: {sorted(unknown)}")
+    if not fields:
+        return
+    cur = conn.execute(
+        f"UPDATE walks SET {', '.join(f'{c} = ?' for c in fields)} "
+        "WHERE walk_id = ?", (*fields.values(), walk_id))
+    conn.commit()
+    if cur.rowcount == 0:
+        raise KeyError(walk_id)
+
+
 def walk_meta(conn: sqlite3.Connection, walk_id: str) -> dict | None:
     row = conn.execute(
         "SELECT walk_id, video_file, site, building, stage, operator, "

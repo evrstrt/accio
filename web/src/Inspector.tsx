@@ -94,23 +94,40 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
   const faces = { ...p.faces, ...pending.faces }
   const cal = { ...p.calib, ...pending.calib }
   const dedup = { ...p.dedup, ...pending.dedup }
+  const m = { ...meta, ...pending.meta }
 
   if (stage === 'video') {
+    /** Metadata is corrected, not re-derived: it ends up in the EXIF of every
+        exported frame, so a typo would otherwise mean re-uploading the video. */
+    const text = (key: keyof typeof m, label: string, type = 'text') => (
+      <Row label={label}>
+        <input className="insp-control" type={type}
+               value={(m as Record<string, string>)[key] ?? ''}
+               onChange={(e) => onEdit('meta', key, e.target.value)} />
+      </Row>
+    )
     return (
       <>
         <Group title="source">
           <Row label="File"><Val>{meta?.videoFile ?? walk.id}</Val></Row>
           <Row label="Format"><Val>dual-fisheye .insv</Val></Row>
+          <Row label="Footage"><Val>{s.frames.toLocaleString()} frames</Val></Row>
         </Group>
         <Group title="capture metadata">
-          <Row label="Site"><input className="insp-control" defaultValue={meta?.site ?? ''} /></Row>
-          <Row label="Building"><input className="insp-control" defaultValue={meta?.building ?? ''} /></Row>
-          <Row label="Stage"><input className="insp-control" defaultValue={meta?.stage ?? ''} /></Row>
-          <Row label="Operator"><input className="insp-control" defaultValue={meta?.operator ?? ''} /></Row>
-          <Row label="Mount height"><Num value={meta?.mountHeightCm ?? 0} /></Row>
-          <Row label="Shot date"><input className="insp-control" type="date"
-                                        defaultValue={meta?.shotDate ?? ''} /></Row>
+          {text('site', 'Site')}
+          {text('building', 'Building')}
+          {text('stage', 'Stage')}
+          {text('operator', 'Operator')}
+          <Row label="Mount height">
+            <Num value={m.mountHeightCm ?? 0} min={0} max={1000}
+                 onChange={(v) => onEdit('meta', 'mountHeightCm', Math.round(v))} />
+          </Row>
+          {text('shotDate', 'Shot date', 'date')}
         </Group>
+        <div className="insp-note">
+          Stamped into the EXIF of every frame in the export, so it travels with
+          the images rather than living only here.
+        </div>
       </>
     )
   }

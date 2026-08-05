@@ -137,7 +137,19 @@ export const fetchJobs = () => req<Job[]>('/api/jobs')
 // Settings edited but not yet applied, by the section of the pipeline params
 // they belong to. The server folds them in and re-runs from the earliest stage
 // they invalidate, so the shape here is the shape it validates against.
+// what the walk was shot on and where. Nothing derived depends on it, so it
+// saves in place rather than re-running a stage.
+export type MetaEdit = {
+  site?: string
+  building?: string
+  stage?: string
+  operator?: string
+  mountHeightCm?: number
+  shotDate?: string
+}
+
 export type Pending = {
+  meta?: MetaEdit
   gate?: { window?: number; band?: [number, number] }
   faces?: { fov_deg?: number; size?: number; yaws?: number[] }
   calib?: { samples?: number; quantile?: number }
@@ -150,8 +162,9 @@ export type Section = keyof Pending
 // people. Must match jobs.pipeline.STAGES on the server.
 export const STAGES = ['stitch', 'gate', 'faces', 'embed', 'calibrate', 'select']
 
-// which stage owns each section: editing it re-runs that stage and the rest
-export const STAGE_OF: Record<Section, string> = {
+// which stage owns each section: editing it re-runs that stage and the rest.
+// `meta` is deliberately absent: it re-runs nothing.
+export const STAGE_OF: Record<string, string> = {
   gate: 'gate', faces: 'faces', calib: 'calibrate', dedup: 'select',
 }
 
@@ -169,6 +182,13 @@ export const postRerun = (walkId: string, p: Pending) =>
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(p),
+  })
+
+export const patchMeta = (walkId: string, m: MetaEdit) =>
+  req<WalkMeta>(`/api/walks/${encodeURIComponent(walkId)}/meta`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(m),
   })
 
 // XHR instead of fetch: multi-GB .insv uploads need progress events
