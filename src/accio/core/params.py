@@ -67,6 +67,29 @@ class EmbedParams:
     device: str | None = None # None = auto: cuda, then mps, then cpu
 
 
+# Semantic segmenters, by cost. All ADE20K: the only public label set with an
+# interior's vocabulary. B0 is for seeing whether the stage is worth having,
+# B4 for the frames that get labelled.
+SEGMENTERS: tuple[str, ...] = (
+    "nvidia/segformer-b4-finetuned-ade-512-512",
+    "nvidia/segformer-b0-finetuned-ade-512-512",
+)
+
+
+@dataclass(frozen=True)
+class SegmentParams:
+    """What is in each kept frame, annotated before anyone labels it.
+
+    Runs on the frames Select kept rather than every face: it is the export
+    that gets annotated, and inference is the expensive part. It never drops a
+    frame, so a wrong mask costs a correction and not a candidate.
+    """
+
+    enabled: bool = False     # opt-in: it pulls a model and takes real time
+    model_name: str = SEGMENTERS[0]
+    device: str | None = None
+
+
 @dataclass(frozen=True)
 class CalibParams:
     """Measuring what "identical" scores on this walk, to set the threshold by.
@@ -101,6 +124,7 @@ class PipelineParams:
     embed: EmbedParams = field(default_factory=EmbedParams)
     calib: CalibParams = field(default_factory=CalibParams)
     dedup: DedupParams = field(default_factory=DedupParams)
+    segment: SegmentParams = field(default_factory=SegmentParams)
 
 
 def from_dict(d: dict) -> PipelineParams:
@@ -119,4 +143,5 @@ def from_dict(d: dict) -> PipelineParams:
         embed=EmbedParams(**d.get("embed", {})),
         calib=CalibParams(**d.get("calib", {})),
         dedup=DedupParams(**d.get("dedup", {})),
+        segment=SegmentParams(**d.get("segment", {})),
     )

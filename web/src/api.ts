@@ -58,6 +58,8 @@ export type Stages = {
   pairs: number          // identical-frame pairs the calibration measured
   reference: number      // what those pairs scored, median
   calibTau: number       // the threshold that resolves to
+  segmented: number      // kept frames that carry a mask
+  classMix: { name: string; share: number }[]
   anchors: number
   absorbed: number
   dropped: number
@@ -73,8 +75,10 @@ export type PipelineSpec = {
   embed: { model_name: string; img_size: number; batch_size: number }
   calib: { samples: number; quantile: number }
   dedup: { tau: number; rule: string }
+  segment: { enabled: boolean; model_name: string }
   embed_model_used: string
   backbones: string[]        // the models this walk could be re-embedded with
+  segmenters: string[]
 }
 
 // what one configuration produced, appended every time a run finishes
@@ -198,19 +202,21 @@ export type Pending = {
   embed?: { model_name?: string; batch_size?: number }
   calib?: { samples?: number; quantile?: number }
   dedup?: { tau?: number; rule?: 'fixed' | 'calibrated' }
+  segment?: { enabled?: boolean; model_name?: string }
 }
 
 export type Section = keyof Pending
 
 // the stages a machine re-runs, in order; Video is the upload and Review is
 // people. Must match jobs.pipeline.STAGES on the server.
-export const STAGES = ['stitch', 'gate', 'faces', 'embed', 'calibrate', 'select']
+export const STAGES = ['stitch', 'gate', 'faces', 'embed', 'calibrate',
+                       'select', 'segment']
 
 // which stage owns each section: editing it re-runs that stage and the rest.
 // `meta` is deliberately absent: it re-runs nothing.
 export const STAGE_OF: Record<string, string> = {
   gate: 'gate', faces: 'faces', embed: 'embed', calib: 'calibrate',
-  dedup: 'select',
+  dedup: 'select', segment: 'segment',
 }
 
 /** A re-select answers with the new counts; anything heavier answers with the

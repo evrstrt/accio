@@ -73,6 +73,12 @@ export function backboneLabel(name: string): string {
   return `${family} ViT-${size}/${m[2]}`
 }
 
+/** "nvidia/segformer-b4-finetuned-ade-512-512" -> "SegFormer-B4 · ADE20K" */
+export function segmenterLabel(name: string): string {
+  const m = /segformer-(b\d)-finetuned-(\w+)-/.exec(name)
+  return m ? `SegFormer-${m[1].toUpperCase()} · ${m[2].toUpperCase()}20K` : name
+}
+
 function Out({ children }: { children: ReactNode }) {
   return <div className="insp-out">{children}</div>
 }
@@ -408,6 +414,59 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
           </Group>
         )}
         <Out>{s.absorbed} absorbed, {s.anchors} anchors</Out>
+      </>
+    )
+  }
+
+  if (stage === 'segment') {
+    const seg = { ...p.segment, ...pending.segment }
+    return (
+      <>
+        <Group title="component">
+          <Row label="Model">
+            <select className="insp-control" disabled={locked}
+                    value={seg.model_name}
+                    onChange={(e) => edit('segment', 'model_name', e.target.value)}>
+              {p.segmenters.map((m) => (
+                <option key={m} value={m}>{segmenterLabel(m)}</option>
+              ))}
+            </select>
+          </Row>
+          <Row label="Labels"><Fixed value="ADE20K, 150 classes"
+                                     options={['ADE20K, 150 classes']} /></Row>
+        </Group>
+        <Group title="settings">
+          <Row label="Run it">
+            <input className="insp-toggle" type="checkbox" disabled={locked}
+                   checked={seg.enabled}
+                   onChange={(e) => edit('segment', 'enabled', e.target.checked)} />
+          </Row>
+          <Row label="Scope"><Fixed value="kept frames"
+                                    options={['kept frames', 'every face']} /></Row>
+        </Group>
+        {s.classMix.length > 0 && (
+          <Group title="what the walk is made of">
+            {/* the mean share of each class across the frames that carry one */}
+            <div className="runs">
+              {s.classMix.map((c) => (
+                <div className="mix" key={c.name}>
+                  <span className="mix-name">{c.name}</span>
+                  <span className="mix-bar">
+                    <span style={{ width: `${Math.round(c.share * 100)}%` }} />
+                  </span>
+                  <span className="mix-pct">{Math.round(c.share * 100)}%</span>
+                </div>
+              ))}
+            </div>
+          </Group>
+        )}
+        <div className="insp-note">
+          Annotation only: it runs after the frame set is decided and never
+          changes it, so a wrong mask costs a correction and not a candidate.
+          Masks are class indices, and they leave in the export beside the
+          frames they belong to.
+        </div>
+        <Out>{seg.enabled ? `${s.segmented} of ${s.kept} masked` : 'off'}</Out>
       </>
     )
   }

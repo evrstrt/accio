@@ -23,7 +23,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..core import blur, calibrate as calibrate_mod, extract, faces
+from ..core import (blur, calibrate as calibrate_mod, extract, faces,
+                    segment as segment_mod)
 from ..core.calibrate import calibrate
 from ..core.dedup import greedy_dedup
 from ..core.embed import Embedder
@@ -31,7 +32,7 @@ from ..core.params import PipelineParams
 
 EMBED_CHUNK = 64  # faces held in memory at once on the way to the embedder
 MANIFEST_COLUMNS = ["pano_idx", "t_sec", "yaw", "path", "kept", "anchor", "cosine"]
-STAGES = ("stitch", "gate", "faces", "embed", "calibrate", "select")
+STAGES = ("stitch", "gate", "faces", "embed", "calibrate", "select", "segment")
 
 # a face on its way through the pipeline: (pano index, t, yaw, file)
 FaceRow = tuple[int, float, int, Path]
@@ -42,7 +43,7 @@ def face_name(pano_idx: int, yaw: int) -> str:
 
 
 def run_walk(video: Path, out_root: Path, params: PipelineParams,
-             embedder: Embedder, progress=None) -> dict:
+             embedder: Embedder, progress=None, segmenter=None) -> dict:
     """progress(stage, status, **counts) is called around every stage, so the
     caller can show the run advancing instead of a single opaque wait."""
     say = progress or (lambda *a, **k: None)
@@ -66,11 +67,11 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
     say("stitch", "done", panos=len(panos))
 
     return _tail(video, out, params, embedder, native_fps, "gate", say,
-                 panos=panos)
+                 panos=panos, segmenter=segmenter)
 
 
 def rerun(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
-          first: str, progress=None) -> dict:
+          first: str, progress=None, segmenter=None) -> dict:
     """Re-run from `first` down, reusing the stages above it as they are.
 
     The stages above are reported done rather than skipped silently, so the
@@ -86,11 +87,12 @@ def rerun(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     say("video", "done")
     for stage in STAGES[:STAGES.index(first)]:
         say(stage, "done")
-    return _tail(video, out, params, embedder, native_fps, first, say)
+    return _tail(video, out, params, embedder, native_fps, first, say,
+                 segmenter=segmenter)
 
 
 def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
-          native_fps: float, first: str, say, panos=None) -> dict:
+          native_fps: float, first: str, say, panos=None, segmenter=None) -> dict:
     """The pipeline below the stitch, entered at `first`."""
     start = STAGES.index(first)
 
@@ -137,6 +139,17 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     save_params(out, params)
     kept = len(result.kept)
     say("select", "done", anchors=kept, absorbed=len(records) - kept)
+
+    # what is in the frames that survived. Annotation only: it runs after the
+    # set is decided and never changes it, so a wrong mask costs a correction
+    # rather than a candidate.
+    if params.segment.enabled:
+        say("segment", "running")
+        named_kept = [named[i][3] for i in result.kept]
+        classes = run_segment(out, named_kept, params, segmenter)
+        say("segment", "done", segmented=len(classes))
+    elif start <= STAGES.index("segment"):
+        clear_segmentation(out)
 
     log_run(out, params, calib, first, len(records), kept)
     clear_failure(out)     # this walk ran through; whatever broke before is past
@@ -209,6 +222,48 @@ def face_rows(out: Path) -> list[FaceRow]:
 def read_calibration(out: Path) -> dict | None:
     path = out / "calibration.json"
     return json.loads(path.read_text()) if path.exists() else None
+
+
+SEGMENT_FILE = "segmentation.json"
+
+
+def run_segment(out: Path, names: list[str], params: PipelineParams,
+                segmenter) -> dict[str, dict[str, float]]:
+    """Mask every kept face and record what each one is made of.
+
+    The mask is written as class indices, not colour, so the file is the label
+    and a palette stays a rendering choice. Only the kept faces are done: it is
+    the export that gets annotated, and inference is the expensive part.
+    """
+    masks = out / segment_mod.MASK_DIR
+    shutil.rmtree(masks, ignore_errors=True)
+    masks.mkdir(parents=True, exist_ok=True)
+    faces_dir = out / "faces"
+
+    classes: dict[str, dict[str, float]] = {}
+    for chunk in batched(names, EMBED_CHUNK):
+        images = [cv2.cvtColor(cv2.imread(str(faces_dir / n)), cv2.COLOR_BGR2RGB)
+                  for n in chunk]
+        segs, labels = segmenter.segment(images)
+        for name, seg in zip(chunk, segs):
+            segment_mod.write_mask(masks / f"{Path(name).stem}.png", seg)
+            classes[name] = segment_mod.shares(seg, labels)
+
+    (out / SEGMENT_FILE).write_text(json.dumps(
+        {"model": params.segment.model_name, "classes": classes}, indent=1))
+    return classes
+
+
+def clear_segmentation(out: Path) -> None:
+    """Turning the stage off takes its output with it, or the export would
+    carry masks of a frame set that no longer exists."""
+    shutil.rmtree(out / segment_mod.MASK_DIR, ignore_errors=True)
+    (out / SEGMENT_FILE).unlink(missing_ok=True)
+
+
+def read_segmentation(out: Path) -> dict:
+    path = out / SEGMENT_FILE
+    return json.loads(path.read_text()) if path.exists() else {}
 
 
 RUNS_FILE = "runs.jsonl"

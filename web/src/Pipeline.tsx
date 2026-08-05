@@ -1,5 +1,5 @@
 import { STAGES } from './api'
-import { backboneLabel } from './Inspector'
+import { backboneLabel, segmenterLabel } from './Inspector'
 import type { Job, StageState, WalkDetail } from './api'
 
 // The pipeline as blocks on the canvas: each one says what it emitted, so the
@@ -99,6 +99,16 @@ const BLOCKS: Block[] = [
     idle: 'greedy cosine',
   },
   {
+    id: 'segment',
+    title: 'Segment',
+    sub: (w) => (w.pipeline.segment.enabled
+      ? segmenterLabel(w.pipeline.segment.model_name) : 'off'),
+    stat: (w) => (w.stages.segmented
+      ? `${w.stages.segmented} masked` : 'not run'),
+    live: (c) => (c.segmented ? `${c.segmented} masked` : ''),
+    idle: 'semantic classes',
+  },
+  {
     id: 'review',
     title: 'Review',
     sub: (w) => (w.stages.dropped ? `${w.stages.dropped} dropped` : 'no overrides'),
@@ -160,7 +170,7 @@ export function rerunLabel(from: string): string {
     Embed: the frames skip it and only its threshold reaches Select. */
 const EDGES: [string, string][] = [
   ['video', 'stitch'], ['stitch', 'gate'], ['gate', 'faces'], ['faces', 'embed'],
-  ['embed', 'select'], ['select', 'review'],
+  ['embed', 'select'], ['select', 'segment'], ['segment', 'review'],
   ['embed', 'calibrate'], ['calibrate', 'select'],
 ]
 

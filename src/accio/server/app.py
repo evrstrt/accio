@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..core import export, extract
-from ..core.params import BACKBONES, PipelineParams
+from ..core.params import BACKBONES, SEGMENTERS, PipelineParams
 from ..core.params import from_dict as params_from_dict
 from ..jobs import pipeline
 from ..jobs.runner import Runner
@@ -244,6 +244,8 @@ def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
     anchors = sum(1 for r in rows if r["kept"] == "1")
     dropped, overridden = export.review_counts(rows, state)
     calib = pipeline.read_calibration(wdir) or {}
+    seg = pipeline.read_segmentation(wdir)
+    seg_classes = seg.get("classes", {})
     return {
         "frames": src.get("frames", 0),
         "seconds": src.get("seconds", 0),
@@ -257,12 +259,29 @@ def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
         "pairs": calib.get("reference", {}).get("n", 0),
         "reference": calib.get("reference", {}).get("median", 0),
         "calibTau": calib.get("tau", 0),
+        "segmented": len(seg_classes),
+        # the classes this walk is made of, largest share first
+        "classMix": top_classes(seg_classes),
         "anchors": anchors,
         "absorbed": len(rows) - anchors,
         "dropped": dropped,
         "overridden": overridden,
         "kept": anchors - dropped,
     }
+
+
+def top_classes(classes: dict[str, dict], n: int = 6) -> list[dict]:
+    """What the walk as a whole is made of: each class's mean share across the
+    frames it appears in, weighted by how much of each it covers."""
+    if not classes:
+        return []
+    totals: dict[str, float] = {}
+    for shares in classes.values():
+        for name, share in shares.items():
+            totals[name] = totals.get(name, 0.0) + share
+    frames = len(classes)
+    ranked = sorted(totals.items(), key=lambda kv: -kv[1])[:n]
+    return [{"name": k, "share": round(v / frames, 3)} for k, v in ranked]
 
 
 def walk_params(walk_id: str) -> PipelineParams:
@@ -279,13 +298,14 @@ def pipeline_spec(walk_id: str) -> dict:
     npz = walk_dir(walk_id) / "embeddings.npz"
     model = str(np.load(npz)["model"]) if npz.exists() else ""
     return dict(asdict(walk_params(walk_id)), embed_model_used=model,
-                backbones=list(BACKBONES))
+                backbones=list(BACKBONES), segmenters=list(SEGMENTERS))
 
 
 # which stage a section of the settings belongs to: editing it invalidates
 # that stage and everything below it
 STAGE_OF = {"extract": "stitch", "gate": "gate", "faces": "faces",
-            "embed": "embed", "calib": "calibrate", "dedup": "select"}
+            "embed": "embed", "calib": "calibrate", "dedup": "select",
+            "segment": "segment"}
 
 
 class GatePatch(BaseModel):
@@ -309,6 +329,11 @@ class CalibPatch(BaseModel):
     quantile: float | None = Field(None, gt=0, le=50)
 
 
+class SegmentPatch(BaseModel):
+    enabled: bool | None = None
+    model_name: str | None = None
+
+
 class DedupPatch(BaseModel):
     tau: float | None = Field(None, gt=0, lt=1)
     rule: str | None = None      # 'fixed' | 'calibrated'
@@ -321,6 +346,7 @@ class Rerun(BaseModel):
     embed: EmbedPatch | None = None
     calib: CalibPatch | None = None
     dedup: DedupPatch | None = None
+    segment: SegmentPatch | None = None
 
 
 def check(r: Rerun) -> None:
@@ -340,6 +366,9 @@ def check(r: Rerun) -> None:
     if r.embed and r.embed.model_name is not None \
             and r.embed.model_name not in BACKBONES:
         raise HTTPException(422, f"unknown backbone {r.embed.model_name!r}")
+    if r.segment and r.segment.model_name is not None \
+            and r.segment.model_name not in SEGMENTERS:
+        raise HTTPException(422, f"unknown segmenter {r.segment.model_name!r}")
 
 
 def merge(params: PipelineParams, r: Rerun
@@ -551,9 +580,20 @@ def export_walk(walk_id: str) -> Response:
     # the provenance record, and a wrong one is worse than none
     data = export.build_zip(walk_id, wdir, rows, state, meta, model,
                             walk_params(walk_id),
-                            db.override_log(conn(), walk_id))
+                            db.override_log(conn(), walk_id),
+                            pipeline.read_segmentation(wdir))
     return Response(data, media_type="application/zip", headers={
         "Content-Disposition": f'attachment; filename="{walk_id}.zip"'})
+
+
+@app.get("/api/walks/{walk_id}/masks/{name}")
+def mask_image(walk_id: str, name: str) -> FileResponse:
+    """The mask as written: class indices, so it is near-black on screen. The
+    panel colours it; the file stays the label."""
+    path = (walk_dir(walk_id) / "masks" / name).resolve()
+    if not path.is_relative_to(WALKS_ROOT) or not path.exists():
+        raise HTTPException(404, "no such mask")
+    return FileResponse(path)
 
 
 @app.get("/api/walks/{walk_id}/faces/{name}")

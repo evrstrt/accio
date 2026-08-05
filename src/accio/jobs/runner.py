@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from ..core.embed import Embedder, TimmEmbedder
+from ..core.segment import SegformerSegmenter, Segmenter
 from ..core.params import PipelineParams
 from .pipeline import STAGES, rerun, run_walk, save_failure
 
@@ -50,6 +51,7 @@ class Runner:
         self.out_root = out_root
         self.params = params or PipelineParams()
         self._embedders: dict[str, Embedder] = {}
+        self._segmenters: dict[str, Segmenter] = {}
         self.jobs: dict[int, Job] = {}
         self._ids = itertools.count(1)
         self._q: queue.Queue[Job] = queue.Queue()
@@ -67,6 +69,17 @@ class Runner:
         if name not in self._embedders:
             self._embedders[name] = TimmEmbedder(params.embed)
         return self._embedders[name]
+
+    def segmenter(self, params: PipelineParams) -> Segmenter | None:
+        """One segmenter per model, and none at all until a walk asks for it:
+        the weights are a few hundred megabytes nobody should pay for by
+        default."""
+        if not params.segment.enabled:
+            return None
+        name = params.segment.model_name
+        if name not in self._segmenters:
+            self._segmenters[name] = SegformerSegmenter(params.segment)
+        return self._segmenters[name]
 
     def submit(self, video: Path, first: str | None = None,
                params: PipelineParams | None = None, walk_id: str = "") -> Job:
@@ -95,12 +108,15 @@ class Runner:
 
             try:
                 params = job.params or self.params
+                seg = self.segmenter(params)
                 if job.first is None:
                     run_walk(job.video, self.out_root, params,
-                             self.embedder(params), progress=progress)
+                             self.embedder(params), progress=progress,
+                             segmenter=seg)
                 else:
                     rerun(job.video, self.out_root / job.walkId, params,
-                          self.embedder(params), job.first, progress=progress)
+                          self.embedder(params), job.first, progress=progress,
+                          segmenter=seg)
                 job.status = "done"
             except Exception as e:
                 job.status = "error"

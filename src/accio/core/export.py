@@ -91,12 +91,16 @@ def stamp_exif(jpg: bytes, payload: dict) -> bytes:
 
 def build_zip(walk_id: str, walk_dir: Path, rows: list[dict],
               state: dict[str, dict], meta: dict, embed_model: str,
-              params: PipelineParams, decisions: list[dict] | None = None) -> bytes:
+              params: PipelineParams, decisions: list[dict] | None = None,
+              segmentation: dict | None = None) -> bytes:
     """The zip is the deliverable, so everything the dataset needs is in it:
     the frames, what produced them, and what a human changed by hand."""
     prefix = name_prefix(walk_id, meta)
     pipeline = dict(asdict(params), embed_model_used=embed_model)
     common = {"walk": walk_id, **meta, "pipeline": pipeline}
+    # a pre-annotation, if the walk has one: the mask travels beside its frame
+    # under the same name, and the class mix goes in the manifest row
+    classes = (segmentation or {}).get("classes", {})
 
     buf = io.BytesIO()
     manifest = []
@@ -114,6 +118,9 @@ def build_zip(walk_id: str, walk_dir: Path, rows: list[dict],
                        "overridden": overridden}
             jpg = (walk_dir / "faces" / r["path"]).read_bytes()
             write(f"frames/{name}", stamp_exif(jpg, payload))
+            mask = walk_dir / "masks" / f"{Path(r['path']).stem}.png"
+            if mask.exists():
+                write(f"masks/{Path(name).stem}.png", mask.read_bytes())
             manifest.append({
                 "file": f"frames/{name}", "walk": walk_id,
                 "site": meta.get("site", ""), "building": meta.get("building", ""),
@@ -122,6 +129,9 @@ def build_zip(walk_id: str, walk_dir: Path, rows: list[dict],
                 "source_face": r["path"], "pick_idx": pick_idx,
                 # the one column a pipeline hash cannot reproduce
                 "overridden": int(overridden),
+                # "wall 0.58; ceiling 0.28; floor 0.10", largest first
+                "classes": "; ".join(f"{k} {v:.2f}" for k, v in
+                                     list(classes.get(r["path"], {}).items())[:6]),
             })
 
         s = io.StringIO()
@@ -140,7 +150,10 @@ def build_zip(walk_id: str, walk_dir: Path, rows: list[dict],
             "log": [{k: v for k, v in d.items() if k != "walkId"}
                     for d in (decisions or [])],
         }, indent=1))
+        if segmentation:
+            write("segmentation.json", json.dumps(segmentation, indent=1))
         write("walk.json", json.dumps({**common, "frames": len(manifest),
                                        "dropped": dropped,
-                                       "overridden": overridden}, indent=1))
+                                       "overridden": overridden,
+                                       "segmented": bool(classes)}, indent=1))
     return buf.getvalue()
