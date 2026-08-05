@@ -46,6 +46,7 @@ export type Stages = {
   anchors: number
   absorbed: number
   dropped: number
+  overridden: number     // groups where a human swapped the auto pick
   kept: number
 }
 

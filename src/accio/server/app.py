@@ -77,7 +77,7 @@ def walks() -> list[dict]:
             continue
         rows = read_manifest(d.name)
         state = db.effective_state(conn(), d.name)
-        n_dropped = sum(1 for s in state.values() if s["dropped"])
+        n_dropped, _ = export.review_counts(rows, state)
         out.append({
             "id": d.name,
             "faces": len(rows),
@@ -173,7 +173,7 @@ def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
     src_file = wdir / "source.json"
     src = json.loads(src_file.read_text()) if src_file.exists() else {}
     anchors = sum(1 for r in rows if r["kept"] == "1")
-    dropped = sum(1 for s in state.values() if s["dropped"])
+    dropped, overridden = export.review_counts(rows, state)
     calib = pipeline.read_calibration(wdir) or {}
     return {
         "frames": src.get("frames", 0),
@@ -189,6 +189,7 @@ def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
         "anchors": anchors,
         "absorbed": len(rows) - anchors,
         "dropped": dropped,
+        "overridden": overridden,
         "kept": anchors - dropped,
     }
 
@@ -409,7 +410,8 @@ def export_walk(walk_id: str) -> Response:
     # the settings this walk was built with, not today's defaults: the EXIF is
     # the provenance record, and a wrong one is worse than none
     data = export.build_zip(walk_id, wdir, rows, state, meta, model,
-                            walk_params(walk_id))
+                            walk_params(walk_id),
+                            db.override_log(conn(), walk_id))
     return Response(data, media_type="application/zip", headers={
         "Content-Disposition": f'attachment; filename="{walk_id}.zip"'})
 

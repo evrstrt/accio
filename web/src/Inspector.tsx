@@ -346,13 +346,13 @@ export default function Inspector({ stage, walk, pending, calib, onEdit,
       <>
         <Group title="manual stage">
           <div className="insp-note">
-            The only stage a pipeline hash cannot reproduce. Every override is
-            logged, and the log travels with the export.
+            The only stage a pipeline hash cannot reproduce. Every decision is
+            logged, and the log leaves in the export as decisions.json.
           </div>
         </Group>
         <Group title="decisions">
           <Row label="Groups dropped"><Val>{s.dropped}</Val></Row>
-          <Row label="Picks overridden"><Val>0</Val></Row>
+          <Row label="Picks overridden"><Val>{s.overridden}</Val></Row>
         </Group>
         <button className="insp-btn" onClick={onOpenReview}>Open Review</button>
         <Out>{s.kept} kept of {s.anchors}</Out>

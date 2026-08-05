@@ -1,6 +1,8 @@
 """Export invariants: naming, review-state resolution, EXIF payload,
 byte-identical re-export."""
 
+import csv
+import io
 import json
 import zipfile
 from io import BytesIO
@@ -11,7 +13,7 @@ import piexif
 import piexif.helper
 
 from accio.core.export import (build_zip, effective_picks, export_name,
-                               name_prefix, slug, stamp_exif)
+                               name_prefix, review_counts, slug, stamp_exif)
 from accio.core.params import PipelineParams
 
 ROWS = [  # two kept anchors; row 1 is absorbed into 0
@@ -32,22 +34,39 @@ def test_slug_and_names():
     assert export_name("gcmr_t2_w9", 12.5, 90) == "gcmr_t2_w9_t0012.5_y090.jpg"
 
 
+SWAP = {"y045_00000.jpg": {"pick": "y045_00001.jpg", "dropped": False}}
+DROP = {"y135_00002.jpg": {"pick": None, "dropped": True}}
+
+
 def test_effective_picks_defaults_swaps_and_drops():
-    assert [p for p, _ in effective_picks(ROWS, {})] == [0, 2]
-    swapped = effective_picks(
-        ROWS, {"y045_00000.jpg": {"pick": "y045_00001.jpg", "dropped": False}})
-    assert [p for p, _ in swapped] == [1, 2]
-    dropped = effective_picks(
-        ROWS, {"y135_00002.jpg": {"pick": None, "dropped": True}})
-    assert [p for p, _ in dropped] == [0]
+    assert [p for _, p, _ in effective_picks(ROWS, {})] == [0, 2]
+    assert [p for _, p, _ in effective_picks(ROWS, SWAP)] == [1, 2]
+    assert [p for _, p, _ in effective_picks(ROWS, DROP)] == [0]
+
+
+def test_effective_picks_report_the_anchor_they_came_from():
+    """What lets the export say which frames a human moved."""
+    assert [(a, p) for a, p, _ in effective_picks(ROWS, SWAP)] == [(0, 1), (2, 2)]
 
 
 def test_effective_picks_survive_a_renumbered_manifest():
     """The point of keying on names: shift every row and the swap holds."""
     shifted = [dict(r, pano_idx=str(int(r["pano_idx"]) + 1)) for r in ROWS[::-1]]
-    state = {"y045_00000.jpg": {"pick": "y045_00001.jpg", "dropped": False}}
-    picks = effective_picks(shifted, state)
-    assert [r["path"] for _, r in picks] == ["y135_00002.jpg", "y045_00001.jpg"]
+    picks = effective_picks(shifted, SWAP)
+    assert [r["path"] for _, _, r in picks] == ["y135_00002.jpg", "y045_00001.jpg"]
+
+
+def test_review_counts_separate_drops_from_swaps():
+    assert review_counts(ROWS, {}) == (0, 0)
+    assert review_counts(ROWS, SWAP) == (0, 1)
+    assert review_counts(ROWS, DROP) == (1, 0)
+
+
+def test_a_decision_on_a_face_that_is_no_longer_an_anchor_does_not_count():
+    """A re-run can move the anchors. The log keeps the click; the funnel
+    must not, or it reports a drop the export cannot show."""
+    stale = {"y045_00001.jpg": {"pick": None, "dropped": True}}   # now absorbed
+    assert review_counts(ROWS, stale) == (0, 0)
 
 
 def jpg_bytes() -> bytes:
@@ -88,3 +107,50 @@ def test_build_zip_contents_and_determinism(tmp_path):
     assert walk["pipeline"]["embed_model_used"] == "dinov3"
 
     assert build_zip(*args) == data  # byte-identical re-export
+
+
+def written(tmp_path, state, decisions=None):
+    faces = tmp_path / "faces"
+    faces.mkdir(exist_ok=True)
+    for r in ROWS:
+        (faces / r["path"]).write_bytes(jpg_bytes())
+    data = build_zip("walk9", tmp_path, ROWS, state, {}, "dinov3",
+                     PipelineParams(), decisions)
+    return zipfile.ZipFile(BytesIO(data))
+
+
+LOG = [{"walkId": "walk9", "anchor": "y045_00000.jpg", "action": "pick",
+        "pick": "y045_00001.jpg", "createdAt": "2026-08-05 09:00:00"}]
+
+
+def test_the_decision_log_leaves_with_the_frames(tmp_path):
+    z = written(tmp_path, SWAP, LOG)
+    d = json.loads(z.read("decisions.json"))
+    assert d["overridden"] == 1 and d["dropped"] == 0
+    # the walk is named once at the top, not repeated on every row
+    assert d["log"] == [{"anchor": "y045_00000.jpg", "action": "pick",
+                         "pick": "y045_00001.jpg",
+                         "createdAt": "2026-08-05 09:00:00"}]
+
+
+def test_an_untouched_walk_still_says_so(tmp_path):
+    d = json.loads(written(tmp_path, {}).read("decisions.json"))
+    assert d == {"walk": "walk9", "dropped": 0, "overridden": 0, "log": []}
+
+
+def test_every_frame_says_whether_a_human_moved_it(tmp_path):
+    z = written(tmp_path, SWAP, LOG)
+    rows = list(csv.DictReader(io.StringIO(z.read("manifest.csv").decode())))
+    assert [r["overridden"] for r in rows] == ["1", "0"]
+    swapped = next(n for n in z.namelist() if n.startswith("frames/"))
+    comment = piexif.load(z.read(swapped))["Exif"][piexif.ExifIFD.UserComment]
+    assert json.loads(piexif.helper.UserComment.load(comment))["overridden"] is True
+
+
+def test_the_log_does_not_break_determinism(tmp_path):
+    args = ("walk9", tmp_path, ROWS, SWAP, {}, "dinov3", PipelineParams(), LOG)
+    faces = tmp_path / "faces"
+    faces.mkdir(exist_ok=True)
+    for r in ROWS:
+        (faces / r["path"]).write_bytes(jpg_bytes())
+    assert build_zip(*args) == build_zip(*args)
