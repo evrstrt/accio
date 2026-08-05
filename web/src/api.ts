@@ -122,13 +122,20 @@ export type Decision = {
   pickIdx?: number
 }
 
+/** FastAPI puts the reason in `detail`, as a string or a validation list.
+    Without it every failure reads the same and says nothing actionable. */
+export function serverSaid(body: string): string {
+  try {
+    const detail = JSON.parse(body)?.detail
+    return (Array.isArray(detail) ? detail[0]?.msg : detail) || ''
+  } catch { return '' }
+}
+
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   if (!res.ok) {
-    // the server says why in `detail`; without it every failure reads the same
-    const detail = await res.json().then((b) => b?.detail).catch(() => null)
-    const said = Array.isArray(detail) ? detail[0]?.msg : detail
-    throw new Error(said || `${res.status} ${res.statusText} for ${url}`)
+    throw new Error(serverSaid(await res.text().catch(() => ''))
+      || `${res.status} ${res.statusText} for ${url}`)
   }
   return res.json()
 }
@@ -245,8 +252,15 @@ export const postIngest = (form: FormData, onProgress?: (frac: number) => void) 
       if (e.lengthComputable) onProgress?.(e.loaded / e.total)
     }
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText))
-      else reject(new Error(`${xhr.status} ${xhr.statusText} for /api/ingest`))
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText))
+        return
+      }
+      // the same `detail` the fetch path reads. A refused upload is refused
+      // for a reason the operator can act on ("upload the _10_ file too"),
+      // and a bare status code throws that away.
+      reject(new Error(serverSaid(xhr.responseText)
+        || `${xhr.status} ${xhr.statusText} for /api/ingest`))
     }
     xhr.onerror = () => reject(new Error('network error during upload'))
     xhr.send(form)

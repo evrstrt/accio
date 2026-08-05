@@ -1,6 +1,8 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { postIngest } from './api'
 import type { Job } from './api'
+import { readFrameSize, whyNotReady } from './insv'
+import type { FrameSize } from './insv'
 
 // The capture metadata that makes the dataset balanceable later. Only what
 // the file cannot answer is asked: the camera model and the moment of the
@@ -19,16 +21,30 @@ const FIELDS = [
 
 export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => void }) {
   const [files, setFiles] = useState<File[]>([])
+  const [sizes, setSizes] = useState<(FrameSize | null)[]>([])
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
 
+  // Measure the dropped files here rather than letting the server refuse them
+  // after the upload: a half-recording is knowable from the frame shape, and
+  // finding out costs a few kilobytes instead of half a gigabyte.
+  useEffect(() => {
+    let live = true
+    setSizes([])
+    Promise.all(files.map((f) => readFrameSize(f).catch(() => null)))
+      .then((s) => { if (live) setSizes(s) })
+    return () => { live = false }
+  }, [files])
+
+  const blocked = whyNotReady(files, sizes)
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!files.length) {
-      setError('Drop an .insv first')
+    if (blocked) {
+      setError(blocked)
       return
     }
     const form = new FormData(formRef.current!)
@@ -89,7 +105,9 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
         Camera and time come from the file. Leave the date and time blank
         unless the camera's clock was wrong.
       </div>
-      {error && <div className="form-error">{error}</div>}
+      {/* say what is wrong with the selection while it can still be fixed */}
+      {files.length > 0 && blocked && <div className="form-error">{blocked}</div>}
+      {error && error !== blocked && <div className="form-error">{error}</div>}
       {busy && (
         <div className="upload-progress">
           <div className="upload-bar">
@@ -100,7 +118,7 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
           </span>
         </div>
       )}
-      <button className="go" type="submit" disabled={busy}>
+      <button className="go" type="submit" disabled={busy || !!blocked}>
         {busy ? 'Uploading…' : 'Process Walk'}
         {!busy && (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
