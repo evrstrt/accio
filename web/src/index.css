@@ -982,13 +982,37 @@ select.insp-control { cursor: pointer; }
 .tile:active { transform: translateY(1px) scale(0.99); }
 .tile.open { border-color: var(--z-blue-border); }
 
-.tile.focused, .tile:focus-visible {
+/* One ring, the browser's own. There used to be a .focused class tracking a
+   separate index, so arrowing drew this outline on one tile and :focus-visible
+   on another. The keyboard drives real focus now, so there is only one. */
+.tile:focus-visible {
   outline: none;
   border-color: var(--z-blue);
   box-shadow: 0 0 0 1px var(--z-blue), var(--z-shadow);
 }
 
 .tile.dropped img { opacity: 0.35; filter: grayscale(0.6); }
+
+/* the keymap, said once above the grid rather than left to be discovered */
+.keys-hint {
+  margin-top: 4px;
+  font: 11px/1.6 var(--z-mono);
+  letter-spacing: 0;
+  color: var(--z-muted);
+}
+
+.keys-hint kbd {
+  display: inline-block;
+  min-width: 14px;
+  margin: 0 2px;
+  padding: 0 4px;
+  border: 1px solid var(--z-border);
+  border-radius: 3px;
+  background: #fff;
+  font: inherit;
+  text-align: center;
+  color: var(--z-icon);
+}
 
 /* Small values sit in Zed's keycap shape: hairline, inset lip, mono. */
 .tile .meta {

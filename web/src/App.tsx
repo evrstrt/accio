@@ -32,6 +32,33 @@ function stage(pending: Pending, saved: Record<string, any>,
   return next as Pending
 }
 
+const inFlight = (j: Job) => j.status === 'queued' || j.status === 'running'
+
+const tileAt = (grid: HTMLElement | null, i: number) =>
+  [...(grid?.children ?? [])]
+    .filter((el) => el.classList.contains('tile'))[i] as HTMLElement | undefined
+
+/** A decision applied to the group it names.
+ *
+ * Review used to POST and then refetch the whole walk and the whole walk list
+ * after every click. `/api/walks/{id}` rebuilds every group and returns the
+ * entire manifest as JSON, and `/api/walks` parses every manifest of every
+ * walk, so one keystroke cost two full scans and a repaint of the grid. All
+ * three actions change one field of one group, which the client already knows
+ * how to compute, so it does. The POST still goes, and a refusal still shows.
+ */
+function applied(walk: WalkDetail, d: Decision): WalkDetail {
+  return {
+    ...walk,
+    groups: walk.groups.map((g) => {
+      if (g.anchor.idx !== d.anchorIdx) return g
+      if (d.action === 'drop') return { ...g, dropped: true }
+      if (d.action === 'restore') return { ...g, dropped: false }
+      return { ...g, pick: d.pickIdx ?? g.auto }
+    }),
+  }
+}
+
 function pickFace(g: Group): Face {
   return g.pick === g.anchor.idx
     ? g.anchor
@@ -95,14 +122,21 @@ function GroupRow({ group, tau, onDecision }: {
   const { anchor, members, pick, dropped } = group
   const candidates = [anchor, ...members]
   const best = Math.max(...candidates.map((f) => f.sharpness)) || 1
+  const shown = candidates.find((f) => f.idx === pick) ?? anchor
   return (
     <div className={`group-row${dropped ? ' dropped' : ''}`}>
       <div className="group-head">
+        {/* The tile shows the frame this group exports, which since the
+            sharpest member started winning is usually not the anchor. Naming
+            only the anchor here made the header disagree with the tile that
+            opened it, which reads as a bug rather than as two facts. */}
         <span>
-          t={anchor.tSec.toFixed(1)}s y{anchor.yaw}
-          {members.length > 0
-            ? `, ${members.length + 1} candidates, sharpest picked, click to change`
-            : ', no duplicates absorbed'}
+          y{anchor.yaw}, from t={anchor.tSec.toFixed(1)}s
+          {members.length > 0 ? <>
+            {`, ${members.length + 1} candidates, exporting `}
+            <b>t={shown.tSec.toFixed(1)}s</b>
+            {shown.idx === group.auto ? ' as the sharpest' : ' by your override'}
+          </> : ', no duplicates absorbed'}
         </span>
         <button
           className={`drop-btn${dropped ? ' restore' : ''}`}
@@ -214,10 +248,22 @@ function KeptGrid({ walk, onDecision }: {
     return () => window.removeEventListener('keydown', onKey)
   }, [groups, focus, open, cols, onDecision])
 
+  // Move the browser's focus, not just a highlight of our own.
+  //
+  // These tiles are real buttons, so the browser has its own idea of which one
+  // is focused, and this used to track a separate index that never agreed with
+  // it: tabbing to a tile and pressing Enter opened whichever group the stale
+  // index named, and arrowing around drew two outlines at once. Driving DOM
+  // focus makes them the same thing, and the roving tabindex below keeps six
+  // hundred tiles out of the tab order.
   useEffect(() => {
-    const tile = [...(gridRef.current?.children ?? [])]
-      .filter((el) => el.classList.contains('tile'))[focus] as HTMLElement | undefined
-    tile?.scrollIntoView({ block: 'nearest' })
+    const tile = tileAt(gridRef.current, focus)
+    if (!tile || tile === document.activeElement) return
+    // only steal focus if it is already in the grid, so arrowing does not yank
+    // the caret out of a field somewhere else on the page
+    const inGrid = gridRef.current?.contains(document.activeElement)
+    if (inGrid) tile.focus({ preventScroll: true })
+    tile.scrollIntoView({ block: 'nearest' })
   }, [focus])
 
   // the last tile on the same visual row as the open one
@@ -237,10 +283,13 @@ function KeptGrid({ walk, onDecision }: {
           const tile = (
             <button
               key={g.anchor.idx}
-              className={`tile kept${isOpen ? ' open' : ''}${g.dropped ? ' dropped' : ''}${
-                i === focus ? ' focused' : ''}`}
+              className={`tile kept${isOpen ? ' open' : ''}${g.dropped ? ' dropped' : ''}`}
               style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}
               onClick={() => { setFocus(i); setOpen(isOpen ? null : g.anchor.idx) }}
+              onFocus={() => setFocus(i)}
+              // one stop for the whole grid: tabbing into six hundred buttons
+              // and out again is not navigation
+              tabIndex={i === focus ? 0 : -1}
               title={`pano ${f.panoIdx}, yaw ${f.yaw}`}
             >
               <img src={thumb(f.url)} alt={`pick t=${f.tSec}s`} loading="lazy" />
@@ -324,7 +373,6 @@ export default function App() {
   // filtered the walk's own row out of the rail, which is where the context
   // menu carrying Retry and Delete lives. The one recovery path in the app
   // disappeared exactly when it was needed.
-  const inFlight = (j: Job) => j.status === 'queued' || j.status === 'running'
   const running = job !== null && inFlight(job)
   const activeJobs = jobs.filter(inFlight)
 
@@ -387,38 +435,58 @@ export default function App() {
     }
   }, [menu])
 
+  // calibration and segmentation depend on nothing the first two return, so
+  // they go out together rather than in a three-deep waterfall
   const reload = useCallback((id: string) =>
-    Promise.all([fetchWalk(id), fetchWalks()])
-      .then(([w, ws]) => { setWalk(w); setWalks(ws) })
-      .then(() => fetchCalibration(id).then(setCalib).catch(() => setCalib(null)))
-      .then(() => fetchSegmentation(id).then(setSeg).catch(() => setSeg(null))),
-    [])
+    Promise.all([
+      fetchWalk(id),
+      fetchWalks(),
+      fetchCalibration(id).catch(() => null),
+      fetchSegmentation(id).catch(() => null),
+    ]).then(([w, ws, c, s]) => {
+      setWalk(w)
+      setWalks(ws)
+      setCalib(c)
+      setSeg(s)
+    }), [])
 
-  // Poll jobs always, fast while something is in flight and slowly otherwise:
-  // a run can start in another tab, and stopping entirely means the rail never
-  // notices it.
-  const active = jobs.some((j) => j.status === 'queued' || j.status === 'running')
+  // Poll only while a run is in flight. It used to tick forever, and because
+  // "nothing is active" was the branch that also refreshed the walk list, an
+  // idle tab hit /api/walks every eight seconds for as long as it was open:
+  // that endpoint parses every manifest of every walk, so a tab left open all
+  // day was thousands of full scans to learn nothing. A run started in another
+  // tab is caught on focus instead, which is when you would look.
+  const active = jobs.some(inFlight)
   const watching = useRef<number | null>(null)
+
+  const pollJobs = useCallback(() => fetchJobs().then((js) => {
+    setJobs(js)
+    setOffline(false)
+    const mine = js.find((j) => j.walkId === selected)
+    // a job of ours leaving flight is the moment the frames on disk changed,
+    // whether it was an ingest, a settings change, or a failure
+    if (mine && selected && inFlight(mine)) watching.current = mine.id
+    else if (mine && !inFlight(mine) && selected
+             && watching.current === mine.id) {
+      watching.current = null
+      reload(selected).catch(() => {})
+      return
+    }
+    if (!js.some(inFlight)) refreshWalks()
+  }).catch(() => setOffline(true)), [selected, reload, refreshWalks])
+
   useEffect(() => {
-    const t = setInterval(() => {
-      fetchJobs().then((js) => {
-        setJobs(js)
-        const mine = js.find((j) => j.walkId === selected)
-        // a job of ours finishing is the moment the frames on disk changed,
-        // whether it was an ingest or a settings change
-        if (mine && selected && mine.status !== 'done') watching.current = mine.id
-        else if (mine?.status === 'done' && selected
-                 && (watching.current === mine.id || !walk)) {
-          watching.current = null
-          reload(selected).catch(() => {})
-        }
-        const stillActive = js.some((j) => j.status === 'queued' || j.status === 'running')
-        setOffline(false)
-        if (!stillActive) refreshWalks()
-      }).catch(() => setOffline(true))
-    }, active ? 2000 : 8000)
+    if (!active) return
+    const t = setInterval(pollJobs, 2000)
     return () => clearInterval(t)
-  }, [active, refreshWalks, reload, selected, walk])
+  }, [active, pollJobs])
+
+  // coming back to the tab is the one moment worth a free check
+  useEffect(() => {
+    const onFocus = () => { pollJobs() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [pollJobs])
 
   // The inspector is a fixed panel over the right of the canvas, so the canvas
   // has to give up the width or the pipeline centres under it. It opens during
@@ -510,13 +578,15 @@ export default function App() {
   const onDecision = useCallback((d: Decision) => {
     if (!selected) return
     setError(null)
+    setWalk((w) => (w ? applied(w, d) : w))
     postDecision(selected, d)
-      .then(() => Promise.all([fetchWalk(selected), fetchWalks()]))
-      .then(([w, ws]) => {
-        setWalk(w)
-        setWalks(ws)
+      // the server disagreeing means the local guess is wrong, so take its
+      // answer rather than leaving the grid showing something that did not
+      // happen. Only on failure; the happy path already matches.
+      .catch((e) => {
+        setError(String(e))
+        fetchWalk(selected).then(setWalk).catch(() => {})
       })
-      .catch((e) => setError(String(e)))
   }, [selected])
 
   return (
@@ -735,6 +805,18 @@ export default function App() {
                 <RunLine walk={walk} />
               </div>
               <MetaLine walk={walk} />
+              {/* A full keymap that nothing mentions is not a keyboard flow.
+                  Reviewing by mouse is one to two clicks a group, so several
+                  hundred a walk, which is the thing the keys exist to avoid. */}
+              <div className="keys-hint">
+                <kbd>←</kbd><kbd>→</kbd> move
+                <span className="sep">·</span>
+                <kbd>enter</kbd> open
+                <span className="sep">·</span>
+                <kbd>x</kbd> drop
+                <span className="sep">·</span>
+                <kbd>1</kbd>–<kbd>9</kbd> pick
+              </div>
             </header>
             <KeptGrid walk={walk} onDecision={onDecision} />
           </>
