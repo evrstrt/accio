@@ -135,6 +135,7 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     say("select", "done", anchors=kept, absorbed=len(records) - kept)
 
     log_run(out, params, calib, first, len(records), kept)
+    clear_failure(out)     # this walk ran through; whatever broke before is past
     return dict(walk=out.name, faces=len(records), anchors=kept,
                 absorbed=len(records) - kept, tau=params.dedup.tau,
                 rule=params.dedup.rule)
@@ -208,6 +209,29 @@ def read_calibration(out: Path) -> dict | None:
 
 RUNS_FILE = "runs.jsonl"
 RUNS_KEPT = 20
+ERROR_FILE = "error.json"
+
+
+def save_failure(out: Path, stage: str, message: str, detail: str = "") -> None:
+    """Record that a run broke, next to whatever it managed to produce.
+
+    The runner holds jobs in memory, so without this a failed ingest leaves a
+    directory and a multi-gigabyte video that nothing in the app can explain
+    or remove once the server restarts.
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    (out / ERROR_FILE).write_text(json.dumps({
+        "stage": stage, "message": message, "detail": detail,
+        "at": datetime.now().isoformat(timespec="seconds")}, indent=1))
+
+
+def clear_failure(out: Path) -> None:
+    (out / ERROR_FILE).unlink(missing_ok=True)
+
+
+def read_failure(out: Path) -> dict | None:
+    path = out / ERROR_FILE
+    return json.loads(path.read_text()) if path.exists() else None
 
 
 def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,

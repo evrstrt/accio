@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
-         deleteWalk, patchMeta, postRerun, STAGES, STAGE_OF } from './api'
+         deleteWalk, patchMeta, postRerun, retryWalk, STAGES,
+         STAGE_OF } from './api'
 import type { Calibration, Decision, Face, Group, Job, Pending, Section,
               WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
@@ -418,6 +419,13 @@ export default function App() {
       .finally(() => setApplying(false))
   }, [selected, metaEdit, settings, willRun, reload])
 
+  const onRetry = useCallback((id: string) => {
+    setMenu(null)
+    retryWalk(id)
+      .then(() => fetchJobs().then(setJobs))
+      .catch((e) => setError(String(e)))
+  }, [])
+
   const onDelete = useCallback((id: string) => {
     setMenu(null)
     deleteWalk(id)
@@ -461,7 +469,7 @@ export default function App() {
           )}
         </div>
         <div className="top-actions">
-          {!ingesting && selected && walk && !running && (
+          {!ingesting && selected && walk && walk.faces > 0 && !running && (
             <>
               <button
                 className={`top-btn${view === 'review' ? ' active' : ''}`}
@@ -502,15 +510,22 @@ export default function App() {
             className={`walk-item${!ingesting && w.id === selected ? ' active' : ''}${
               menu?.walk.id === w.id ? ' menued' : ''}`}
             onClick={() => { setIngesting(false); setSelected(w.id) }}
+            title={w.error ? `Failed at ${w.error.stage}: ${w.error.message}`
+              : w.ready ? undefined : 'This run never finished'}
             onContextMenu={(e) => {
               e.preventDefault()
               setMenu({ walk: w, x: e.clientX, y: e.clientY, armed: false })
             }}
           >
             <span className="walk-id">{w.id}</span>
-            <span className="walk-stats">
-              <span className="kept-n">{w.kept}</span>/{w.faces}
-            </span>
+            {/* frames if it has any, and a mark if its last run broke: a walk
+                can have both, when a re-run failed over a good earlier one */}
+            {w.ready && (
+              <span className="walk-stats">
+                <span className="kept-n">{w.kept}</span>/{w.faces}
+              </span>
+            )}
+            {(!w.ready || w.error) && <span className="job-dot error" />}
           </button>
         ))}
       </nav>
@@ -523,6 +538,11 @@ export default function App() {
           onPointerDown={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
         >
+          {!menu.armed && menu.walk.error && (
+            <button className="ctx-item" onClick={() => onRetry(menu.walk.id)}>
+              Retry from {menu.walk.error.stage}
+            </button>
+          )}
           {menu.armed ? (
             <>
               <div className="ctx-warn">
@@ -558,7 +578,7 @@ export default function App() {
           </defs>
           <rect width="100%" height="100%" fill="url(#dot)" />
         </svg>
-        {error && <div className="error">{error}</div>}
+        {error && <div className="page-error">{error}</div>}
         {!error && ingesting && (
           <Ingest
             onSubmitted={(job) => {
@@ -570,6 +590,12 @@ export default function App() {
         )}
         {!error && !ingesting && (walk || running) && view === 'pipeline' && (
           <>
+            {walk?.error && !running && (
+              <div className="notice">
+                <b>{walk.error.stage}</b> failed on the last run: {walk.error.message}
+                {walk.faces > 0 && <> The frames below are from the run before it.</>}
+              </div>
+            )}
             {edited > 0 && (
               <div className={`pill${refused ? ' refused' : ''}`}>
                 <span className="pill-text">

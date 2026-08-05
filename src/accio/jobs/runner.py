@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ..core.embed import Embedder, TimmEmbedder
 from ..core.params import PipelineParams
-from .pipeline import STAGES, rerun, run_walk
+from .pipeline import STAGES, rerun, run_walk, save_failure
 
 
 @dataclass
@@ -102,9 +102,14 @@ class Runner:
                     rerun(job.video, self.out_root / job.walkId, params,
                           self.embedder(params), job.first, progress=progress)
                 job.status = "done"
-            except Exception:
+            except Exception as e:
                 job.status = "error"
                 job.error = traceback.format_exc(limit=2)
                 for stage, state in job.stages.items():
                     if state == "running":
                         job.stages[stage] = "error"
+                # on disk too: jobs live in memory, the walk does not
+                broke = next((s for s, st in job.stages.items()
+                              if st == "error"), "")
+                save_failure(self.out_root / job.walkId, broke, str(e) or
+                             type(e).__name__, job.error)

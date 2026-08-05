@@ -443,6 +443,26 @@ select.insp-control { cursor: pointer; }
 .insp-btn:hover { background: #fff; }
 .insp-btn:active { transform: translateY(1px) scale(0.99); box-shadow: none; }
 
+/* a run that broke, said once above the pipeline rather than on every block:
+   the stages below it may still hold good frames from an earlier run */
+.notice {
+  position: sticky;
+  top: calc(var(--topbar-h) + 12px);
+  z-index: 15;
+  width: fit-content;
+  max-width: 720px;
+  margin: 0 auto 12px;
+  padding: 6px 12px;
+  background: #fff;
+  border: 1px solid rgba(228, 0, 20, 0.4);
+  border-radius: 6px;
+  box-shadow: var(--z-shadow-pop);
+  font-size: 13px;
+  color: var(--z-red);
+}
+
+.notice b { font-weight: 500; }
+
 /* --- right-click menu on a walk ---------------------------------------- */
 
 .ctx {
@@ -1082,11 +1102,14 @@ select.insp-control { cursor: pointer; }
 
 /* --- states ------------------------------------------------------------- */
 
-.empty, .error {
+/* the whole-page states. Named apart from the `error` modifier that marks a
+   dot or a block: a bare `.error` rule matches those too, and 48px of padding
+   turns a 7px dot into a red bar. */
+.empty, .page-error {
   padding: 48px 0;
   text-align: center;
   font-size: 13px;
   color: var(--z-muted);
 }
 
-.error { color: var(--z-red); }
+.page-error { color: var(--z-red); }

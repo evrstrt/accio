@@ -114,11 +114,22 @@ function stageView(b: Block, walk: WalkDetail | null, job: Job | null) {
   // A run in flight wins over the manifest: re-running an existing walk must
   // show this run's progress, not the counts the last one left behind.
   const live = job !== null && job.status !== 'done'
+  // A walk with no frames never finished, so its stages are not done. If the
+  // failure was recorded we know which one broke; if not, all we can say is
+  // that none of them completed.
+  const incomplete = !live && !!walk && walk.faces === 0
+  const broke = incomplete ? STAGES.indexOf(walk!.error?.stage ?? '') : -1
+  const rest = (id: string): StageState => {
+    if (!incomplete) return 'done'
+    if (broke < 0) return 'queued'
+    const i = STAGES.indexOf(id)
+    return i < broke ? 'done' : i === broke ? 'error' : 'queued'
+  }
   const state: StageState =
     b.id === 'video' ? 'done'
-      : b.id === 'review' ? (live || !walk ? 'queued' : 'done')
+      : b.id === 'review' ? (live || !walk || incomplete ? 'queued' : 'done')
       : live ? job.stages[b.id] ?? 'queued'
-      : walk ? 'done' : 'queued'
+      : walk ? rest(b.id) : 'queued'
   // a stage above the one a re-run entered at was not touched, so what the
   // manifest says about it is still true; at and below, only the job knows
   const reused = live && !!job.first

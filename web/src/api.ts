@@ -27,11 +27,21 @@ export type WalkMeta = {
   shotDate: string
 } | null
 
+// a run that broke, recorded next to whatever it managed to produce
+export type Failure = {
+  stage: string
+  message: string
+  detail: string
+  at: string
+}
+
 export type WalkSummary = {
   id: string
   faces: number
   kept: number
   meta: WalkMeta
+  ready: boolean         // got as far as a manifest
+  error: Failure | null
 }
 
 export type Stages = {
@@ -84,6 +94,7 @@ export type WalkDetail = {
   stages: Stages
   pipeline: PipelineSpec
   runs: Run[]            // newest first
+  error: Failure | null
 }
 
 export type StageState = 'queued' | 'running' | 'done' | 'error'
@@ -202,6 +213,9 @@ export const postRerun = (walkId: string, p: Pending) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(p),
   })
+
+export const retryWalk = (walkId: string) =>
+  req<Job>(`/api/walks/${encodeURIComponent(walkId)}/retry`, { method: 'POST' })
 
 export const deleteWalk = (walkId: string) =>
   req<{ deleted: string; videos: string[] }>(

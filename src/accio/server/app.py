@@ -58,14 +58,32 @@ def runner() -> Runner:
 
 
 def walk_dir(walk_id: str) -> Path:
+    """A walk is a directory under the root, whether or not it made frames.
+
+    A run that broke leaves the directory and the video behind. Requiring a
+    manifest here would make that walk invisible to the list and impossible to
+    delete, which is how a failed ingest turns into a few hundred megabytes
+    nothing in the app can account for.
+    """
     d = (WALKS_ROOT / walk_id).resolve()
-    if not d.is_relative_to(WALKS_ROOT) or not (d / "manifest.csv").exists():
+    if not d.is_relative_to(WALKS_ROOT) or not d.is_dir():
         raise HTTPException(404, f"unknown walk {walk_id!r}")
     return d
 
 
+def finished(walk_id: str) -> Path:
+    """A walk that got as far as a manifest; anything reading one needs this."""
+    d = walk_dir(walk_id)
+    if not (d / "manifest.csv").exists():
+        raise HTTPException(409, f"{walk_id} has no frames; its run did not finish")
+    return d
+
+
 def read_manifest(walk_id: str) -> list[dict]:
-    with open(walk_dir(walk_id) / "manifest.csv") as f:
+    path = walk_dir(walk_id) / "manifest.csv"
+    if not path.exists():
+        return []
+    with open(path) as f:
         return list(csv.DictReader(f))
 
 
@@ -73,7 +91,7 @@ def read_manifest(walk_id: str) -> list[dict]:
 def walks() -> list[dict]:
     out = []
     for d in sorted(WALKS_ROOT.iterdir()) if WALKS_ROOT.exists() else []:
-        if not (d / "manifest.csv").exists():
+        if not d.is_dir():
             continue
         rows = read_manifest(d.name)
         state = db.effective_state(conn(), d.name)
@@ -83,6 +101,10 @@ def walks() -> list[dict]:
             "faces": len(rows),
             "kept": sum(r["kept"] == "1" for r in rows) - n_dropped,
             "meta": db.walk_meta(conn(), d.name),
+            # a walk with no manifest never finished: it is listed so it can be
+            # seen and removed, not because there is anything to review
+            "ready": bool(rows),
+            "error": pipeline.read_failure(d),
         })
     return out
 
@@ -163,7 +185,9 @@ def walk_detail(walk_id: str) -> dict:
             "meta": db.walk_meta(conn(), walk_id),
             "stages": stage_counts(walk_id, rows, state),
             "pipeline": pipeline_spec(walk_id),
-            "runs": pipeline.read_runs(walk_dir(walk_id))}
+            "runs": pipeline.read_runs(walk_dir(walk_id)),
+            # a walk whose run broke still opens: the canvas shows where
+            "error": pipeline.read_failure(walk_dir(walk_id))}
 
 
 def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
@@ -310,7 +334,7 @@ def rerun(walk_id: str, r: Rerun) -> dict:
     measured. Both answer with the new counts straight away. Anything that has
     to render or measure again queues on the worker and the canvas follows it.
     """
-    out = walk_dir(walk_id)
+    out = finished(walk_id)
     check(r)
     if runner().busy(walk_id):
         raise HTTPException(409, "this walk is already running")
@@ -376,7 +400,8 @@ class Decision(BaseModel):
 
 @app.post("/api/walks/{walk_id}/decisions")
 def post_decision(walk_id: str, d: Decision) -> dict:
-    rows = read_manifest(walk_id)  # 404s on unknown walk
+    finished(walk_id)
+    rows = read_manifest(walk_id)
     if d.action not in ("pick", "drop", "restore"):
         raise HTTPException(422, f"unknown action {d.action!r}")
     if not (0 <= d.anchorIdx < len(rows)) or rows[d.anchorIdx]["kept"] != "1":
@@ -390,6 +415,30 @@ def post_decision(walk_id: str, d: Decision) -> dict:
     db.log_decision(conn(), walk_id, rows[d.anchorIdx]["path"], d.action,
                     rows[d.pickIdx]["path"] if d.pickIdx is not None else None)
     return {"ok": True}
+
+
+@app.post("/api/walks/{walk_id}/retry")
+def retry(walk_id: str) -> dict:
+    """Run the failed stage again with the settings the walk already has.
+
+    A failure clears only when a run succeeds, and re-applying the same
+    settings is correctly a no-op, so without this a walk that broke on
+    something transient wears the mark until a setting is changed to shake it
+    loose.
+    """
+    out = walk_dir(walk_id)
+    failure = pipeline.read_failure(out)
+    if failure is None:
+        raise HTTPException(409, f"{walk_id} has no failure to retry")
+    if runner().busy(walk_id):
+        raise HTTPException(409, "this walk is already running")
+    first = failure.get("stage") or ""
+    video = walk_video(walk_id)
+    # a walk that broke at the stitch has nothing to re-enter: start it over
+    if first not in pipeline.STAGES or first == "stitch":
+        return runner().submit(video).public()
+    return runner().submit(video, first=first, params=walk_params(walk_id),
+                           walk_id=walk_id).public()
 
 
 @app.delete("/api/walks/{walk_id}")
@@ -442,7 +491,7 @@ def calib_image(walk_id: str, name: str) -> FileResponse:
 
 @app.get("/api/walks/{walk_id}/export")
 def export_walk(walk_id: str) -> Response:
-    wdir = walk_dir(walk_id)
+    wdir = finished(walk_id)
     rows = read_manifest(walk_id)
     state = db.effective_state(conn(), walk_id)
     meta = db.walk_meta(conn(), walk_id) or {}
