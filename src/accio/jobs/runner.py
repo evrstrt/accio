@@ -16,7 +16,7 @@ from pathlib import Path
 from ..core.embed import Embedder, TimmEmbedder
 from ..core.segment import OpenVocabSegmenter, SemanticSegmenter, Segmenter
 from ..core.params import PipelineParams
-from .pipeline import STAGES, rerun, run_walk, save_failure
+from .pipeline import ERROR_FILE, STAGES, rerun, run_walk, save_failure
 
 
 @dataclass
@@ -55,7 +55,32 @@ class Runner:
         self.jobs: dict[int, Job] = {}
         self._ids = itertools.count(1)
         self._q: queue.Queue[Job] = queue.Queue()
+        self.recover()
         threading.Thread(target=self._work, daemon=True).start()
+
+    def recover(self) -> None:
+        """Mark walks whose run the process did not survive.
+
+        Only the except block writes error.json, so a SIGKILL, an OOM or a
+        closed laptop leaves a walk with panoramas, no manifest and no failure.
+        Every route then refuses it: rerun 409s with "has no frames", retry
+        409s with "no failure to retry", and the canvas shows every stage
+        queued forever. The one action that works is Delete, which also unlinks
+        the multi-gigabyte original. Writing the failure down turns that into
+        one Retry click, and because stitch skips frames already exported, the
+        retry costs nothing for the work that did land.
+        """
+        if not self.out_root.exists():
+            return
+        for walk in self.out_root.iterdir():
+            if not walk.is_dir() or not (walk / "source.json").exists():
+                continue
+            if (walk / "manifest.csv").exists() or (walk / ERROR_FILE).exists():
+                continue
+            save_failure(walk, "stitch", "the server stopped mid-run",
+                         "No failure was recorded because the process did not "
+                         "live to write one. Retry picks up from the stitch, "
+                         "reusing whatever frames already landed.")
 
     def embedder(self, params: PipelineParams) -> Embedder:
         """One embedder per backbone, kept between jobs.
@@ -71,20 +96,45 @@ class Runner:
         return self._embedders[name]
 
     def segmenter(self, params: PipelineParams) -> Segmenter | None:
-        """One segmenter per model, and none at all until a walk asks for it:
+        """The current segmenter, and none at all until a walk asks for one:
         the weights are a few hundred megabytes nobody should pay for by
-        default."""
+        default.
+
+        Exactly one is held. The key includes the classes, because an
+        open-vocabulary model resolves its prompt into token spans when it
+        loads, so a different vocabulary is a different segmenter whatever its
+        weights are. Keeping them all was the problem: Grounding DINO plus SAM
+        ViT-H is around 2.4 GB, and editing the class list is the entire point
+        of an open-vocabulary model, so the workflow it exists for was the one
+        that allocated until the device ran out.
+        """
         if not params.segment.enabled:
             return None
         name = params.segment.model_name
-        # keyed on the classes too: an open-vocabulary model with a different
-        # prompt is a different segmenter, whatever its weights are
         key = f"{name}|{'|'.join(params.segment.classes)}"
         if key not in self._segmenters:
+            self._segmenters.clear()          # drop the old weights first
+            self._free_device()
             self._segmenters[key] = (
                 OpenVocabSegmenter(params.segment) if params.segment.kind == "open"
                 else SemanticSegmenter(params.segment))
         return self._segmenters[key]
+
+    @staticmethod
+    def _free_device() -> None:
+        """Dropping the reference is not enough on an accelerator: the caching
+        allocator keeps the blocks until it is told otherwise."""
+        try:
+            import gc
+
+            import torch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except Exception:
+            pass          # freeing is an optimisation; never fail a run for it
 
     def submit(self, video: Path, first: str | None = None,
                params: PipelineParams | None = None, walk_id: str = "") -> Job:
@@ -103,34 +153,45 @@ class Runner:
         return [j.public() for j in sorted(self.jobs.values(), key=lambda j: -j.id)]
 
     def _work(self) -> None:
+        # the loop must outlive anything inside it. The handler below writes to
+        # disk, and the likeliest reason a run failed is that the disk is full,
+        # which makes the handler fail too. That used to kill the thread, and
+        # then submit() kept accepting work that nothing would ever pick up:
+        # every walk sat queued forever with no error and no clue, until
+        # somebody thought to restart the server.
         while True:
-            job = self._q.get()
-            job.status = "running"
-
-            def progress(stage: str, status: str, **counts) -> None:
-                job.stages[stage] = status
-                job.stats.update(counts)
-
             try:
-                params = job.params or self.params
-                seg = self.segmenter(params)
-                if job.first is None:
-                    run_walk(job.video, self.out_root, params,
-                             self.embedder(params), progress=progress,
-                             segmenter=seg)
-                else:
-                    rerun(job.video, self.out_root / job.walkId, params,
-                          self.embedder(params), job.first, progress=progress,
-                          segmenter=seg)
-                job.status = "done"
-            except Exception as e:
-                job.status = "error"
-                job.error = traceback.format_exc(limit=2)
-                for stage, state in job.stages.items():
-                    if state == "running":
-                        job.stages[stage] = "error"
-                # on disk too: jobs live in memory, the walk does not
-                broke = next((s for s, st in job.stages.items()
-                              if st == "error"), "")
-                save_failure(self.out_root / job.walkId, broke, str(e) or
-                             type(e).__name__, job.error)
+                self._run_one(self._q.get())
+            except Exception:
+                traceback.print_exc()
+
+    def _run_one(self, job: Job) -> None:
+        job.status = "running"
+
+        def progress(stage: str, status: str, **counts) -> None:
+            job.stages[stage] = status
+            job.stats.update(counts)
+
+        try:
+            params = job.params or self.params
+            seg = self.segmenter(params)
+            if job.first is None:
+                run_walk(job.video, self.out_root, params,
+                         self.embedder(params), progress=progress,
+                         segmenter=seg)
+            else:
+                rerun(job.video, self.out_root / job.walkId, params,
+                      self.embedder(params), job.first, progress=progress,
+                      segmenter=seg)
+            job.status = "done"
+        except Exception as e:
+            job.status = "error"
+            job.error = traceback.format_exc(limit=2)
+            for stage, state in job.stages.items():
+                if state == "running":
+                    job.stages[stage] = "error"
+            # on disk too: jobs live in memory, the walk does not
+            broke = next((s for s, st in job.stages.items()
+                          if st == "error"), "")
+            save_failure(self.out_root / job.walkId, broke, str(e) or
+                         type(e).__name__, job.error)

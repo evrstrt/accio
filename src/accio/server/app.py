@@ -55,8 +55,22 @@ def runner() -> Runner:
     global _runner
     with _runner_lock:
         if _runner is None:
+            reap_incoming()
             _runner = Runner(WALKS_ROOT)
     return _runner
+
+
+def reap_incoming() -> None:
+    """Nothing under .incoming survives a restart, by construction.
+
+    An upload is staged there and moved out once it is known to be stitchable,
+    with the directory removed in a finally. Process death skips the finally,
+    and what it leaves is a partial multi-gigabyte file in a directory no route
+    reads and no operator has reason to look in.
+    """
+    staging = VIDEO_DIR / ".incoming"
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def walk_dir(walk_id: str) -> Path:
@@ -168,6 +182,13 @@ async def ingest(
             raise HTTPException(422, f"{video.name} is {width}x{height}: one lens "
                                      "of a two-file recording. Upload its _10_ "
                                      "file alongside it.")
+        # the walk id is the file name, so a second upload of it would take
+        # over the first walk's directory, its original, and its review
+        # decisions, which are keyed by face name and would silently re-attach
+        # to whatever frame now carries it
+        if (WALKS_ROOT / video.stem).exists():
+            raise HTTPException(409, f"{video.stem} is already a walk. Delete it "
+                                     "first if you mean to replace it.")
         video = shutil.move(str(video), VIDEO_DIR / video.name)
         for p in saved:
             if p.exists():
