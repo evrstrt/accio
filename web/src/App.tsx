@@ -94,13 +94,14 @@ function GroupRow({ group, tau, onDecision }: {
 }) {
   const { anchor, members, pick, dropped } = group
   const candidates = [anchor, ...members]
+  const best = Math.max(...candidates.map((f) => f.sharpness)) || 1
   return (
     <div className={`group-row${dropped ? ' dropped' : ''}`}>
       <div className="group-head">
         <span>
           t={anchor.tSec.toFixed(1)}s y{anchor.yaw}
           {members.length > 0
-            ? `, ${members.length + 1} candidates, click to change the pick`
+            ? `, ${members.length + 1} candidates, sharpest picked, click to change`
             : ', no duplicates absorbed'}
         </span>
         <button
@@ -114,6 +115,9 @@ function GroupRow({ group, tau, onDecision }: {
       <div className="strip">
         {candidates.map((f, n) => {
           const isPick = f.idx === pick && !dropped
+          // sharpness only means anything next to its siblings: the absolute
+          // number swings with how much texture is in view
+          const rel = f.sharpness / best
           return (
             <button
               key={f.idx}
@@ -122,16 +126,22 @@ function GroupRow({ group, tau, onDecision }: {
               onClick={() => {
                 if (!isPick) onDecision({ anchorIdx: anchor.idx, action: 'pick', pickIdx: f.idx })
               }}
+              title={`sharpness ${f.sharpness.toFixed(0)}`}
             >
               {n < 9 && <span className="key">{n + 1}</span>}
               <img src={f.url} alt={`t=${f.tSec.toFixed(1)}s y${f.yaw}`} loading="lazy" />
+              {candidates.length > 1 && (
+                <span className="sharp" aria-hidden>
+                  <span style={{ width: `${Math.round(100 * rel)}%` }} />
+                </span>
+              )}
               <span
                 className={`cos${isPick ? ' pick-label' : ''}${
                   !isPick && f.cosine !== null
                     && f.cosine < tau + BORDERLINE_MARGIN ? ' borderline' : ''
                 }`}
               >
-                {isPick ? (f.idx === anchor.idx ? 'auto pick' : 'override')
+                {isPick ? (f.idx === group.auto ? 'sharpest' : 'override')
                   : f.cosine === null ? `t=${f.tSec.toFixed(1)}s` : f.cosine.toFixed(3)}
               </span>
             </button>
@@ -169,9 +179,6 @@ function KeptGrid({ walk, onDecision }: {
 
   // keyboard review: arrows move, enter opens, x drops, 1-9 swap the pick
   useEffect(() => {
-    const tiles = () =>
-      [...(gridRef.current?.children ?? [])].filter((el) =>
-        el.classList.contains('tile')) as HTMLElement[]
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return
       const t = e.target as HTMLElement | null
@@ -223,7 +230,9 @@ function KeptGrid({ walk, onDecision }: {
         {walk.groups.map((g, i) => {
           const f = pickFace(g)
           const isOpen = open === g.anchor.idx
-          const overridden = g.pick !== g.anchor.idx
+          // a human disagreeing with the pipeline, not with the anchor: the
+          // auto pick is already usually a member rather than the anchor
+          const overridden = g.pick !== g.auto
           const tile = (
             <button
               key={g.anchor.idx}

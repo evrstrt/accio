@@ -1066,6 +1066,24 @@ select.insp-control { cursor: pointer; }
 .member .cos.borderline { color: var(--z-amber); }
 .member .cos.pick-label { color: var(--z-green); }
 
+/* Relative sharpness across the group, which is the only way it reads: the
+   absolute variance-of-Laplacian swings with how much texture is in view, so
+   a bar against the group's best says what a number cannot. */
+.member .sharp {
+  display: block;
+  height: 2px;
+  margin-top: 3px;
+  background: var(--z-surface);
+}
+
+.member .sharp > span {
+  display: block;
+  height: 100%;
+  background: var(--z-wire);
+}
+
+.member.is-pick .sharp > span { background: var(--z-green); }
+
 /* --- jobs --------------------------------------------------------------- */
 
 /* a walk still running carries a dot where a finished one carries its counts */

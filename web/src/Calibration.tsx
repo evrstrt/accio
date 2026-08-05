@@ -1,8 +1,17 @@
 import type { Calibration } from './api'
 
-// How tau was arrived at, with the frames it was measured on. Each pair is a
-// kept frame and the raw frame a fraction of a second later: the same scene,
-// so whatever they score is this walk's ceiling for "identical".
+// How tau was arrived at. Two numbers, and they answer different questions.
+//
+// τ comes from the far pairs: faces at one heading far enough apart to be
+// somewhere else. Merging those is the risk a threshold carries, so the budget
+// prices it directly. It runs generous, because a merge costs nothing
+// permanent (every face stays on disk, only the manifest changes) while an
+// under-cut walk has already been paid to label twice.
+//
+// The pairs shown below are the other measurement: a kept frame against the
+// raw frame milliseconds later. Identical content, so it says what this
+// walk's stitch and backbone are capable of. It is a health check, not the
+// threshold; a 40 ms gap says nothing about frames seconds apart.
 
 export default function CalibrationModal({ walkId, calib, onClose }: {
   walkId: string
@@ -27,12 +36,38 @@ export default function CalibrationModal({ walkId, calib, onClose }: {
         </div>
 
         <p className="calib-note">
-          Every kept frame here is paired with the raw frame {ms} ms later: the
-          same scene, so what they score is what <em>identical</em> means for
-          this walk. {calib.samples} panoramas were sampled across the walk, and
-          τ is set at the {calib.quantile}th percentile of the {calib.reference.n}
-          {' '}pairs that gives, so a merge needs two frames about as alike as a
-          pair taken {ms} ms apart.
+          τ is placed on the {calib.far.n.toLocaleString()} pairs of faces at
+          one heading more than {calib.farSeconds}s apart. Those are different
+          places, and {calib.falseMergePct}% of them are allowed to merge, so τ
+          sits at the {(100 - calib.falseMergePct).toFixed(calib.falseMergePct % 1 ? 1 : 0)}th
+          {' '}percentile of what elsewhere scores here. Nothing is deleted:
+          every face stays on disk and a lower budget brings the merged ones
+          back, so this is cheaper to set too high than too low.
+        </p>
+
+        <div className="calib-stats">
+          <div><span className="calib-n">{calib.far.median}</span> far median</div>
+          <div><span className="calib-n">{calib.far.p95}</span> p95</div>
+          <div><span className="calib-n">{calib.far.p99}</span> p99</div>
+          <div><span className="calib-n">{calib.far.max}</span> highest</div>
+          <div className="calib-tau">
+            τ <span className="calib-n">{calib.tau ?? 'none'}</span>
+          </div>
+        </div>
+
+        {calib.tau === null && (
+          <div className="calib-warn">
+            This walk has only {calib.far.n} pairs more than {calib.farSeconds}s
+            apart, too few to place a threshold on. Use the fixed rule, or a
+            longer walk.
+          </div>
+        )}
+
+        <p className="calib-note">
+          The {calib.reference.n} pairs below are the health check: a kept frame
+          against the raw frame {ms} ms later, over {calib.samples} panoramas
+          spread across the walk. Identical content, so what they score is the
+          ceiling this stitch and this backbone can reach.
         </p>
 
         <div className="calib-stats">
@@ -40,16 +75,20 @@ export default function CalibrationModal({ walkId, calib, onClose }: {
           <div><span className="calib-n">{calib.reference.p05}</span> p05</div>
           <div><span className="calib-n">{calib.reference.min}</span> lowest</div>
           <div><span className="calib-n">{calib.reference.n}</span> pairs</div>
-          <div className="calib-tau">
-            τ <span className="calib-n">{calib.tau}</span>
-          </div>
         </div>
 
-        {!calib.healthy && (
+        {calib.referenceError && (
           <div className="calib-warn">
-            The reference is lower than identical frames should score. The
-            stitch, the exposure or the backbone is likely misbehaving on this
-            walk, and a threshold above the reference would merge nothing.
+            The health check did not run: {calib.referenceError}. τ is
+            unaffected, it comes from the far pairs, but nothing here vouches
+            for the stitch on this walk.
+          </div>
+        )}
+
+        {!calib.healthy && !calib.referenceError && (
+          <div className="calib-warn">
+            Identical frames score lower here than they should. The stitch, the
+            exposure or the backbone is likely misbehaving on this walk.
           </div>
         )}
 
@@ -64,7 +103,8 @@ export default function CalibrationModal({ walkId, calib, onClose }: {
               </div>
               <div className="calib-meta">
                 <span>t={p.tSec}s y{p.yaw}</span>
-                <span className={p.cosine <= calib.tau ? 'calib-low' : ''}>
+                <span className={calib.tau !== null && p.cosine <= calib.tau
+                                 ? 'calib-low' : ''}>
                   {p.cosine.toFixed(3)}
                 </span>
               </div>

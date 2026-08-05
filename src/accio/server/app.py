@@ -209,6 +209,7 @@ def walk_detail(walk_id: str) -> dict:
         "kept": r["kept"] == "1",
         "anchor": int(r["anchor"]) if r["anchor"] else None,
         "cosine": float(r["cosine"]) if r["cosine"] else None,
+        "sharpness": float(r["sharpness"]),
     } for i, r in enumerate(rows)]
     # decisions are stored by face name; the API speaks manifest indices, so
     # translate at the boundary and the stored log survives a re-run
@@ -219,11 +220,14 @@ def walk_detail(walk_id: str) -> dict:
             continue
         s = state.get(rows[f["idx"]]["path"], {"pick": None, "dropped": False})
         pick = idx_of.get(s["pick"]) if s["pick"] else None
+        # the machine's choice is the sharpest member; the human's overrides it
+        auto = idx_of.get(rows[f["idx"]]["pick"], f["idx"])
         groups.append({
             "anchor": f,
             "members": sorted((m for m in faces if m["anchor"] == f["idx"]),
                               key=lambda m: -m["cosine"]),
-            "pick": pick if pick is not None else f["idx"],
+            "auto": auto,
+            "pick": pick if pick is not None else auto,
             "dropped": s["dropped"],
         })
     return {"id": walk_id, "faces": len(faces), "groups": groups,
@@ -255,11 +259,13 @@ def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
         "panos": len(list(pano_dir.glob(f"{extract.PANO_PREFIX}*{extract.PANO_EXT}"))),
         "sharp": len({r["pano_idx"] for r in rows}),
         "faces": len(rows),
-        # the calibration stage's own output: how alike identical frames were,
-        # over how many pairs, and the threshold that resolves to
+        # the calibration stage's own output: how alike identical frames were
+        # (the health check), how many far-apart pairs the threshold was placed
+        # against, and what it resolved to
         "pairs": calib.get("reference", {}).get("n", 0),
         "reference": calib.get("reference", {}).get("median", 0),
-        "calibTau": calib.get("tau", 0),
+        "farPairs": calib.get("far", {}).get("n", 0),
+        "calibTau": calib.get("tau") or 0,
         "segmented": len(seg_classes),
         # the classes this walk is made of, largest share first
         "classMix": top_classes(seg_classes),
@@ -328,7 +334,8 @@ class EmbedPatch(BaseModel):
 
 class CalibPatch(BaseModel):
     samples: int | None = Field(None, ge=2, le=200)
-    quantile: float | None = Field(None, gt=0, le=50)
+    far_seconds: float | None = Field(None, ge=2, le=600)
+    false_merge_pct: float | None = Field(None, gt=0, le=50)
 
 
 class SegmentPatch(BaseModel):
@@ -427,12 +434,20 @@ def rerun(walk_id: str, r: Rerun) -> dict:
     params, first, changed = merge(walk_params(walk_id), r)
     if first is None:
         return {"changed": False}
-    # a different percentile of the same pairs is not a new measurement
-    if changed == {"calib.quantile"}:
+    # a different budget over the same far pairs is not a new measurement.
+    # far_seconds is: it redraws which pairs count as elsewhere. And a record
+    # with no far cosines stored has nothing to re-read, so that falls through
+    # to the stage rather than resolving a threshold from an empty array.
+    if changed == {"calib.false_merge_pct"} and pipeline.can_requantile(out):
         pipeline.requantile(out, params)
         first = "select"
     if first == "select":
-        return dict(pipeline.reselect(out, params), changed=True)
+        try:
+            return dict(pipeline.reselect(out, params), changed=True)
+        except ValueError as e:
+            # an unmeasurable threshold is the operator's problem to act on,
+            # not a server fault, and the message says what to do about it
+            raise HTTPException(422, str(e)) from e
     # only the stages that read the original need it: Calibrate stitches the
     # neighbour frames it measures against, and everything below works from
     # the faces already on disk

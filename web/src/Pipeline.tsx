@@ -83,10 +83,10 @@ const BLOCKS: Block[] = [
   {
     id: 'calibrate',
     title: 'Calibrate',
-    sub: (w) => `p${w.pipeline.calib.quantile} of ${w.pipeline.calib.samples} panos`,
-    stat: (w) => `${w.stages.reference} over ${w.stages.pairs} pairs`,
-    live: (c) => (c.pairs ? `${c.reference} over ${c.pairs} pairs` : ''),
-    idle: 'identical frames',
+    sub: (w) => `${w.pipeline.calib.false_merge_pct}% false merges allowed`,
+    stat: (w) => `τ ${w.stages.calibTau} over ${w.stages.farPairs} far pairs`,
+    live: (c) => (c.farPairs ? `τ ${c.calibTau} over ${c.farPairs} far pairs` : ''),
+    idle: 'what elsewhere scores',
     aside: true,
   },
   {

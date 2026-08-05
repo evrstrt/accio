@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from accio.core.dedup import greedy_dedup
+from accio.core.dedup import greedy_dedup, sharpest
 from accio.core.embed import l2_normalise
 from accio.core.params import DedupParams
 
@@ -57,3 +57,80 @@ def test_empty_input():
     result = greedy_dedup(np.zeros((0, 8), dtype=np.float32), P94)
     assert result.kept == []
     assert result.dropped == []
+
+
+# --- a station's own headings are coverage, not duplicates -----------------
+
+def test_two_headings_of_one_station_never_absorb_each_other():
+    """A symmetric room, or the 20 degrees every seam overlaps by design,
+    pushes two yaws of one panorama over any threshold. Merging them deletes a
+    heading that nothing will shoot again."""
+    emb = unit([1, 0, 0], [1, 0.01, 0])          # cosine well above tau
+    assert greedy_dedup(emb, P94).kept == [0]    # without the guard: merged
+    guarded = greedy_dedup(emb, P94, np.array([7, 7]))
+    assert guarded.kept == [0, 1]
+    assert guarded.anchor_of == {}
+
+
+def test_the_guard_does_not_stop_a_later_station_absorbing():
+    """Only the same panorama is exempt; the next station along is exactly
+    what dedup is for."""
+    emb = unit([1, 0, 0], [1, 0.01, 0], [1, 0.02, 0])
+    r = greedy_dedup(emb, P94, np.array([1, 1, 2]))
+    assert r.kept == [0, 1]
+    assert r.anchor_of[2][0] in (0, 1)
+
+
+def test_a_revisit_to_an_earlier_station_still_merges():
+    emb = unit([1, 0, 0], [0, 1, 0], [1, 0.01, 0])
+    r = greedy_dedup(emb, P94, np.array([1, 1, 9]))
+    assert r.kept == [0, 1]
+    assert r.anchor_of[2][0] == 0
+
+
+def test_mismatched_panorama_ids_are_refused():
+    with pytest.raises(ValueError, match="panorama ids"):
+        greedy_dedup(unit([1, 0], [0, 1]), P94, np.array([1]))
+
+
+# --- which member of a group gets exported ---------------------------------
+
+def wall(*rows):
+    """A walk where every frame is the same wall, so all of it is one group."""
+    return greedy_dedup(unit(*rows), P94)
+
+
+def test_the_group_exports_its_sharpest_not_its_first():
+    """The ordinary case: the operator enters a bay mid-turn and the smeared
+    frame arrives first, then they settle and take several clean ones."""
+    r = wall([1, 0, 0], [1, 0.02, 0], [1, 0.01, 0])
+    assert r.kept == [0]                       # one group, anchored on the smear
+    assert sharpest(r, np.array([12.0, 88.0, 51.0])) == {0: 1}
+
+
+def test_the_anchor_wins_when_it_is_the_sharpest():
+    r = wall([1, 0, 0], [1, 0.02, 0])
+    assert sharpest(r, np.array([90.0, 40.0])) == {0: 0}
+
+
+def test_a_tie_stays_on_the_anchor():
+    """Nothing to gain from shuffling, and the anchor is what review shows."""
+    r = wall([1, 0, 0], [1, 0.02, 0])
+    assert sharpest(r, np.array([50.0, 50.0])) == {0: 0}
+
+
+def test_a_group_of_one_is_its_own_pick():
+    r = greedy_dedup(unit([1, 0, 0], [0, 1, 0]), P94)
+    assert sharpest(r, np.array([10.0, 20.0])) == {0: 0, 1: 1}
+
+
+def test_every_group_gets_exactly_one_pick_from_its_own_members():
+    r = wall([1, 0, 0], [1, 0.02, 0], [1, 0.01, 0])
+    r2 = greedy_dedup(unit([1, 0, 0], [1, 0.02, 0], [0, 1, 0], [0, 1, 0.02]), P94)
+    for result in (r, r2):
+        picks = sharpest(result, np.arange(10.0, 10.0 + len(result.anchor_of)
+                                           + len(result.kept)))
+        assert set(picks) == set(result.kept)
+        for anchor, pick in picks.items():
+            members = {anchor} | {i for i, _c in result.group_of[anchor]}
+            assert pick in members

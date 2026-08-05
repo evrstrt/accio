@@ -20,6 +20,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import atomic
 from .params import ExtractParams
 
 PANO_PREFIX = "pano_"
@@ -236,8 +237,8 @@ def save_panos(pano_dir: Path, frames: list[PanoFrame]) -> None:
     decimation, and it is what calibration times its neighbour frames off. So
     the stitch writes it down and every later stage reads it instead of guessing.
     """
-    (pano_dir / PANO_INDEX).write_text(json.dumps(
-        [{"index": f.index, "tSec": f.t_sec} for f in frames]))
+    atomic.write_json(pano_dir / PANO_INDEX,
+                      [{"index": f.index, "tSec": f.t_sec} for f in frames])
 
 
 def load_panos(pano_dir: Path) -> list[PanoFrame]:

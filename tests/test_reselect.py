@@ -25,9 +25,13 @@ def make_walk(tmp_path):
     np.savez(tmp_path / "embeddings.npz", embeddings=vecs, model="stub")
     with open(tmp_path / "manifest.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["pano_idx", "t_sec", "yaw", "path", "kept", "anchor", "cosine"])
+        w.writerow(["pano_idx", "t_sec", "yaw", "path", "kept", "anchor",
+                    "cosine", "sharpness", "pick"])
         for i, name in enumerate(NAMES):
-            w.writerow([i, f"{i * 0.5:.1f}", name[1:4], name, 1, "", ""])
+            # rising sharpness, so a group's sharpest is never the one that
+            # arrived first and the pick column has to do real work
+            w.writerow([i, f"{i * 0.5:.1f}", name[1:4], name, 1, "", "",
+                        f"{10 + 10 * i:.2f}", name])
     return tmp_path
 
 

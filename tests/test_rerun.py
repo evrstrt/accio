@@ -23,7 +23,10 @@ PARAMS = PipelineParams(
     faces=FaceParams(size=32, yaws=(45, 225)),
     gate=GateParams(window=1),                  # keep every pano
 )
-CALIB = {"tau": 0.94, "quantile": 5.0, "pairs": [], "healthy": True,
+CALIB = {"tau": 0.94, "falseMergePct": 1.0, "farSeconds": 20.0, "samples": 10,
+         "pairs": [], "healthy": True, "referenceError": "",
+         "far": {"n": 200, "median": 0.6, "p95": 0.9, "p99": 0.94, "max": 0.95,
+                 "cosines": []},
          "reference": {"median": 0.98, "p05": 0.96, "min": 0.95, "n": 8},
          "gapSeconds": 0.033}
 

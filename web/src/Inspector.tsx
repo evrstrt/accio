@@ -274,44 +274,63 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
     return (
       <>
         <Group title="component">
-          <Row label="Reference"><Fixed value="next raw frame"
-                                        options={['next raw frame', 'held pose',
-                                                  'repeat walk']} /></Row>
+          <Row label="Placed against"><Fixed value="far-apart pairs"
+                                             options={['far-apart pairs']} /></Row>
         </Group>
         <Group title="settings">
+          <Row label="False merges allowed">
+            <Num value={cal.false_merge_pct} step={0.5} min={0.1} max={50}
+                 disabled={locked}
+                 onChange={(v) => edit('calib', 'false_merge_pct', v)} />
+          </Row>
+          <Row label="Elsewhere is (s) apart">
+            <Num value={cal.far_seconds} step={5} min={2} max={600}
+                 disabled={locked}
+                 onChange={(v) => edit('calib', 'far_seconds', v)} />
+          </Row>
           <Row label="Panoramas sampled">
             <Num value={cal.samples} min={2} max={200}
                  disabled={locked} onChange={(v) => edit('calib', 'samples', Math.round(v))} />
-          </Row>
-          <Row label="Percentile">
-            <Num value={cal.quantile} step={1} min={0.5} max={50}
-                 disabled={locked} onChange={(v) => edit('calib', 'quantile', v)} />
           </Row>
         </Group>
         {calib && (
           <>
             <Group title="measured">
-              <Row label="Identical scores">
-                <Val>{calib.reference.median} median</Val>
+              <Row label="Elsewhere scores">
+                <Val>{calib.far.median} median, {calib.far.p99} p99</Val>
               </Row>
-              <Row label="Lowest pair"><Val>{calib.reference.min}</Val></Row>
-              <Row label="Pairs"><Val>{calib.reference.n}, {gap} ms apart</Val></Row>
-              <Row label="Calibrated τ"><Val>{calib.tau}</Val></Row>
-              {!calib.healthy && (
-                <div className="insp-warn">Reference is low; this walk may be
-                  mis-stitched or under-exposed.</div>
+              <Row label="Far pairs"><Val>{calib.far.n.toLocaleString()}</Val></Row>
+              <Row label="Calibrated τ"><Val>{calib.tau ?? 'none'}</Val></Row>
+              <Row label="Identical scores">
+                <Val>{calib.reference.median} median, {gap} ms apart</Val>
+              </Row>
+              {calib.tau === null && (
+                <div className="insp-warn">Too few far pairs to place τ on.
+                  Use the fixed rule, or a longer walk.</div>
+              )}
+              {calib.referenceError && (
+                <div className="insp-warn">The health check did not run. τ is
+                  unaffected, but nothing vouches for the stitch here.</div>
+              )}
+              {!calib.healthy && !calib.referenceError && (
+                <div className="insp-warn">Identical frames score low; this walk
+                  may be mis-stitched or under-exposed.</div>
               )}
             </Group>
             <button className="insp-btn" onClick={onShowCalibration}>
-              How τ was measured
+              How τ was placed
             </button>
           </>
         )}
         <div className="insp-note">
-          Sampling more panoramas measures again from the video. Moving the
-          percentile only re-reads the pairs already measured, so it is instant.
+          Allowing more false merges cuts harder. Nothing is lost by cutting too
+          hard, since every face stays on disk and a lower budget brings them
+          back; the cost of cutting too little is paid in labelling. Moving it
+          only re-reads the pairs already measured, so it is instant; widening
+          the window redraws which pairs count as elsewhere, and sampling more
+          panoramas measures the health check again from the video.
         </div>
-        <Out>τ {s.calibTau} from {s.pairs} pairs</Out>
+        <Out>τ {s.calibTau} from {s.farPairs} far pairs</Out>
       </>
     )
   }

@@ -7,12 +7,14 @@ export type Face = {
   kept: boolean
   anchor: number | null
   cosine: number | null
+  sharpness: number      // variance of Laplacian, scored when the face was cut
 }
 
 export type Group = {
   anchor: Face
   members: Face[]
-  pick: number // idx of the effective pick (anchor unless overridden)
+  auto: number // idx the pipeline chose: the sharpest member of the group
+  pick: number // idx of the effective pick (auto unless a human overrode it)
   dropped: boolean
 }
 
@@ -55,8 +57,9 @@ export type Stages = {
   panos: number
   sharp: number
   faces: number
-  pairs: number          // identical-frame pairs the calibration measured
+  pairs: number          // identical-frame pairs the health check measured
   reference: number      // what those pairs scored, median
+  farPairs: number       // far-apart pairs the threshold was placed against
   calibTau: number       // the threshold that resolves to
   segmented: number      // kept frames that carry a mask
   classMix: { name: string; share: number }[]
@@ -73,7 +76,7 @@ export type PipelineSpec = {
   faces: { fov_deg: number; size: number; yaws: number[] }
   gate: { window: number; band: [number, number] }
   embed: { model_name: string; img_size: number; batch_size: number }
-  calib: { samples: number; quantile: number }
+  calib: { samples: number; far_seconds: number; false_merge_pct: number }
   dedup: { tau: number; rule: string }
   segment: {
     enabled: boolean
@@ -170,12 +173,17 @@ export type CalibPair = {
 }
 
 export type Calibration = {
-  tau: number
-  quantile: number
+  tau: number | null              // null when the walk is too short to place one
+  falseMergePct: number
+  farSeconds: number
   samples: number
   pairs: CalibPair[]
+  // what elsewhere scores, which is what tau is placed against
+  far: { n: number; median: number; p95: number; p99: number; max: number }
+  // the identical-content ceiling, kept as a health check on the stitch
   reference: { median: number; p05: number; min: number; n: number }
   healthy: boolean
+  referenceError: string
   gapSeconds: number
 }
 
@@ -226,7 +234,7 @@ export type Pending = {
   gate?: { window?: number; band?: [number, number] }
   faces?: { fov_deg?: number; size?: number; yaws?: number[] }
   embed?: { model_name?: string; batch_size?: number }
-  calib?: { samples?: number; quantile?: number }
+  calib?: { samples?: number; far_seconds?: number; false_merge_pct?: number }
   dedup?: { tau?: number; rule?: 'fixed' | 'calibrated' }
   segment?: {
     enabled?: boolean

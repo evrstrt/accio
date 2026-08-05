@@ -23,15 +23,16 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..core import (blur, calibrate as calibrate_mod, extract, faces,
+from ..core import (atomic, blur, calibrate as calibrate_mod, extract, faces,
                     segment as segment_mod)
 from ..core.calibrate import calibrate
-from ..core.dedup import greedy_dedup
+from ..core.dedup import greedy_dedup, sharpest
 from ..core.embed import Embedder
 from ..core.params import PipelineParams
 
 EMBED_CHUNK = 64  # faces held in memory at once on the way to the embedder
-MANIFEST_COLUMNS = ["pano_idx", "t_sec", "yaw", "path", "kept", "anchor", "cosine"]
+MANIFEST_COLUMNS = ["pano_idx", "t_sec", "yaw", "path", "kept", "anchor",
+                    "cosine", "sharpness", "pick"]
 STAGES = ("stitch", "gate", "faces", "embed", "calibrate", "select", "segment")
 
 # a face on its way through the pipeline: (pano index, t, yaw, file)
@@ -54,12 +55,14 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
     # the denominator the rest of the funnel is a fraction of
     native_fps, frames, width, height = extract.probe(video)
     files = extract.lens_files(video)
-    (out / "source.json").write_text(json.dumps(
-        {"frames": frames, "fps": native_fps, "seconds": round(frames / native_fps, 1),
+    atomic.write_json(
+        out / "source.json",
+        {"frames": frames, "fps": native_fps,
+         "seconds": round(frames / native_fps, 1),
          "files": [p.name for p in files], "width": width, "height": height,
          # both packings are dual-fisheye; the count says whether this walk
          # actually had both circles to stitch from
-         "lenses": extract.lenses_in_frame(width, height) * len(files)}))
+         "lenses": extract.lenses_in_frame(width, height) * len(files)})
     say("video", "done", frames=frames, seconds=round(frames / native_fps))
 
     say("stitch", "running")
@@ -105,10 +108,10 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
         else:
             sharp = sharp_panos(out)   # unchanged by this re-run, read back
         say("faces", "running")
-        records = render_faces(out, sharp, params)
+        records, sharpness = render_faces(out, sharp, params)
         say("faces", "done", faces=len(records))
     else:
-        records = face_rows(out)
+        records, sharpness = face_rows(out)
 
     if start <= STAGES.index("embed"):
         say("embed", "running")
@@ -119,23 +122,26 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
             embeddings = data["embeddings"]
 
     named = [(i, t, yaw, path.name) for i, t, yaw, path in records]
-    # what "identical" scores on this walk. Measured whether or not the
-    # threshold uses it: a low reference means the stitch, the exposure or the
-    # backbone is misbehaving, which is worth knowing either way.
+    # what elsewhere scores on this walk, which is what the threshold has to
+    # stay above, plus the identical-content reference as a health check: a low
+    # one means the stitch, the exposure or the backbone is misbehaving.
     if start <= STAGES.index("calibrate"):
         say("calibrate", "running")
         calib = calibrate(video, out, named, embeddings, params, embedder,
                           native_fps)
         save_calibration(out, calib)
         say("calibrate", "done", pairs=calib["reference"]["n"],
-            reference=calib["reference"]["median"], calibTau=calib["tau"])
+            reference=calib["reference"]["median"],
+            farPairs=calib["far"]["n"], calibTau=calib["tau"] or 0)
     else:
         calib = read_calibration(out)
 
     say("select", "running")
     params = apply_rule(params, calib)
-    result = greedy_dedup(embeddings, params.dedup)
-    write_manifest(out / "manifest.csv", named, result)
+    result = greedy_dedup(embeddings, params.dedup,
+                          np.array([p for p, _, _, _ in named]))
+    picks = sharpest(result, np.asarray(sharpness, dtype=float))
+    write_manifest(out / "manifest.csv", named, result, sharpness, picks)
     save_params(out, params)
     kept = len(result.kept)
     say("select", "done", anchors=kept, absorbed=len(records) - kept)
@@ -143,9 +149,15 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     # what is in the frames that survived. Annotation only: it runs after the
     # set is decided and never changes it, so a wrong mask costs a correction
     # rather than a candidate.
+    #
+    # On the picks, not the anchors: those are the frames the export ships, and
+    # they differ from their anchor in about half of all groups now that the
+    # sharpest member wins. Segmenting anchors would leave most exported frames
+    # with no mask and a blank class row, and build_zip's `if mask.exists()`
+    # would swallow it.
     if params.segment.enabled:
         say("segment", "running")
-        named_kept = [named[i][3] for i in result.kept]
+        named_kept = [named[picks[i]][3] for i in result.kept]
         classes = run_segment(out, named_kept, params, segmenter)
         say("segment", "done", segmented=len(classes))
     elif start <= STAGES.index("segment"):
@@ -177,13 +189,19 @@ def render_faces(out: Path, sharp: list, params: PipelineParams) -> list[FaceRow
     shutil.rmtree(faces_dir, ignore_errors=True)
     faces_dir.mkdir(parents=True, exist_ok=True)
     records: list[FaceRow] = []
+    sharpness: list[float] = []
     for p in sharp:
         pano_img = cv2.imread(str(p.path))
         for yaw, img in faces.render_faces(pano_img, params.faces).items():
             path = faces_dir / face_name(p.index, yaw)
             cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
             records.append((p.index, p.t_sec, yaw, path))
-    return records
+            # scored here because the face is already in memory, and per face
+            # rather than per panorama: an operator turning their head smears
+            # the leading face while the trailing one stays sharp, and one
+            # score for the whole sphere cannot see that
+            sharpness.append(blur.vol_score(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)))
+    return records, sharpness
 
 
 def embed_faces(out: Path, records: list[FaceRow], params: PipelineParams,
@@ -196,8 +214,8 @@ def embed_faces(out: Path, records: list[FaceRow], params: PipelineParams,
     # embeddings outlive the walk: registry dedup against re-walks, leak checks
     # and future selection all reuse them. Cosines are only comparable between
     # walks embedded by the same model, so the model name travels with the rows.
-    np.savez(out / "embeddings.npz",
-             embeddings=embeddings, model=params.embed.model_name)
+    atomic.atomically(out / "embeddings.npz", lambda tmp: np.savez(
+        tmp, embeddings=embeddings, model=params.embed.model_name))
     return embeddings
 
 
@@ -212,11 +230,14 @@ def sharp_panos(out: Path) -> list:
     return [p for p in extract.load_panos(out / "pano") if p.index in keep]
 
 
-def face_rows(out: Path) -> list[FaceRow]:
-    """The faces already on disk, in the capture order the embeddings are in."""
+def face_rows(out: Path) -> tuple[list[FaceRow], list[float]]:
+    """The faces already on disk, in the capture order the embeddings are in,
+    with the sharpness scored when they were rendered."""
     faces_dir = out / "faces"
-    return [(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]),
-             faces_dir / r["path"]) for r in manifest_rows(out)]
+    rows = manifest_rows(out)
+    return ([(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]),
+              faces_dir / r["path"]) for r in rows],
+            [float(r["sharpness"]) for r in rows])
 
 
 def read_calibration(out: Path) -> dict | None:
@@ -254,9 +275,9 @@ def run_segment(out: Path, names: list[str], params: PipelineParams,
             seen.update({str(i): labels[i] for i in np.unique(seg).tolist()
                          if i in labels})
 
-    (out / SEGMENT_FILE).write_text(json.dumps(
-        {"model": params.segment.model_name, "labels": seen,
-         "classes": classes}, indent=1))
+    atomic.write_json(out / SEGMENT_FILE,
+                      {"model": params.segment.model_name, "labels": seen,
+                       "classes": classes}, indent=1)
     return classes
 
 
@@ -285,9 +306,9 @@ def save_failure(out: Path, stage: str, message: str, detail: str = "") -> None:
     or remove once the server restarts.
     """
     out.mkdir(parents=True, exist_ok=True)
-    (out / ERROR_FILE).write_text(json.dumps({
+    atomic.write_json(out / ERROR_FILE, {
         "stage": stage, "message": message, "detail": detail,
-        "at": datetime.now().isoformat(timespec="seconds")}, indent=1))
+        "at": datetime.now().isoformat(timespec="seconds")}, indent=1)
 
 
 def clear_failure(out: Path) -> None:
@@ -309,6 +330,7 @@ def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,
     disk only ever shows the last one that ran.
     """
     ref = (calib or {}).get("reference", {})
+    far = (calib or {}).get("far", {})
     row = {
         "at": datetime.now().isoformat(timespec="seconds"),
         "from": first,
@@ -317,6 +339,11 @@ def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,
         "rule": params.dedup.rule,
         "reference": ref.get("median", 0),
         "pairs": ref.get("n", 0),
+        # what the threshold was actually placed against, and the risk it was
+        # placed at: without these a row cannot say why tau was that number
+        "farPairs": far.get("n", 0),
+        "farP99": far.get("p99", 0),
+        "falseMergePct": params.calib.false_merge_pct,
         "faces": faces,
         "anchors": anchors,
         "absorbed": faces - anchors,
@@ -335,57 +362,97 @@ def read_runs(out: Path, limit: int = RUNS_KEPT) -> list[dict]:
 
 
 def save_calibration(out: Path, calib: dict) -> None:
-    (out / "calibration.json").write_text(json.dumps(calib, indent=1))
+    atomic.write_json(out / "calibration.json", calib, indent=1)
+
+
+def can_requantile(out: Path) -> bool:
+    """Whether the budget can be moved by re-reading rather than re-measuring.
+
+    It needs the far cosines the record stores. A walk whose calibration was
+    written without them has nothing to re-read, and re-resolving from an
+    empty array would quietly answer "no threshold" for a walk that has one.
+    """
+    calib = read_calibration(out)
+    return bool(calib and calib.get("far", {}).get("cosines"))
 
 
 def requantile(out: Path, params: PipelineParams) -> dict:
-    """Move the threshold's percentile without measuring anything again.
+    """Move the false-merge budget without measuring anything again.
 
-    The pairs and their cosines are already on disk; the percentile is a
-    statistic over them, not a new measurement. So this costs a sort, and the
-    knob can be explored instead of committed to.
+    Both distributions are already on disk; the budget is a percentile over
+    the far cosines, not a new measurement. So this costs a sort, and the knob
+    can be explored instead of committed to. Changing far_seconds is not this:
+    that redraws which pairs count as elsewhere, and needs the embeddings.
     """
     calib = read_calibration(out)
     if calib is None:
         raise FileNotFoundError("this walk has no calibration record")
-    calib = calibrate_mod.record(calib["pairs"], params.calib,
-                                 calib.get("gapSeconds", 0.0))
+    calib = calibrate_mod.record(calib["pairs"],
+                                 np.array(calib.get("far", {}).get("cosines", [])),
+                                 params.calib, calib.get("gapSeconds", 0.0),
+                                 calib.get("referenceError", ""))
     save_calibration(out, calib)
     return calib
 
 
 def apply_rule(params: PipelineParams, calib: dict | None) -> PipelineParams:
     """Under the calibrated rule the threshold comes from the measurement, so
-    tau always holds the number that actually ran."""
+    tau always holds the number that actually ran.
+
+    A walk too short to have a far distribution has no measured threshold, and
+    saying so beats writing the default in and calling it calibrated.
+    """
     if params.dedup.rule != "calibrated" or not calib:
         return params
-    return replace(params, dedup=replace(params.dedup, tau=calib["tau"]))
+    tau = calib.get("tau")
+    if tau is None:
+        raise ValueError(
+            f"this walk has {calib.get('far', {}).get('n', 0)} pairs more than "
+            f"{calib.get('farSeconds', 0)}s apart, too few to set a threshold "
+            f"from. Use the fixed rule, or a longer walk.")
+    return replace(params, dedup=replace(params.dedup, tau=tau))
 
 
 def write_manifest(path: Path, faces_out: list[tuple[int, float, int, str]],
-                   result) -> None:
+                   result, sharpness: list[float],
+                   picks: dict[int, int] | None = None) -> None:
     """One row per face in capture order, with the group it landed in.
 
     faces_out is (pano_idx, t_sec, yaw, file name); the dedup result supplies
     kept / anchor / cosine. Shared by the full run and by a re-select, so the
     two can never disagree about the manifest's shape.
+
+    `pick` is only on anchor rows: the member this group exports, which is the
+    sharpest of it rather than whichever arrived first. A reviewer can still
+    override it, and that override is stored separately, so this column stays
+    the machine's answer and never records a human's.
     """
     kept = set(result.kept)
-    with open(path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(MANIFEST_COLUMNS)
-        for i, (pano_idx, t_sec, yaw, name) in enumerate(faces_out):
-            anchor, cos = ("", "")
-            if i in result.anchor_of:
-                a, c = result.anchor_of[i]
-                anchor, cos = str(a), f"{c:.4f}"
-            w.writerow([pano_idx, f"{t_sec:.1f}", yaw, name, int(i in kept),
-                        anchor, cos])
+    if picks is None:
+        picks = sharpest(result, np.asarray(sharpness, dtype=float))
+
+    def rows(target: Path) -> None:
+        with open(target, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(MANIFEST_COLUMNS)
+            for i, (pano_idx, t_sec, yaw, name) in enumerate(faces_out):
+                anchor, cos = ("", "")
+                if i in result.anchor_of:
+                    a, c = result.anchor_of[i]
+                    anchor, cos = str(a), f"{c:.4f}"
+                pick = faces_out[picks[i]][3] if i in picks else ""
+                w.writerow([pano_idx, f"{t_sec:.1f}", yaw, name, int(i in kept),
+                            anchor, cos, f"{sharpness[i]:.2f}", pick])
+
+    # this file is the walk: sharp_panos and face_rows both rebuild the stages
+    # above from it, so a half-written one does not lose the selection, it
+    # loses everything the stitch paid for
+    atomic.atomically(path, rows)
 
 
 def save_params(out: Path, params: PipelineParams) -> None:
     """The settings this walk's frames were built with, next to the frames."""
-    (out / "params.json").write_text(json.dumps(asdict(params), indent=1))
+    atomic.write_json(out / "params.json", asdict(params), indent=1)
 
 
 def reselect(walk_out: Path, params: PipelineParams) -> dict:
@@ -405,10 +472,12 @@ def reselect(walk_out: Path, params: PipelineParams) -> dict:
 
     calib = read_calibration(walk_out)
     params = apply_rule(params, calib)
-    result = greedy_dedup(embeddings, params.dedup)
+    result = greedy_dedup(embeddings, params.dedup,
+                          np.array([int(r["pano_idx"]) for r in rows]))
     write_manifest(walk_out / "manifest.csv",
                    [(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]), r["path"])
-                    for r in rows], result)
+                    for r in rows], result,
+                   [float(r["sharpness"]) for r in rows])
     save_params(walk_out, params)
     kept = len(result.kept)
     log_run(walk_out, params, calib, "select", len(rows), kept)

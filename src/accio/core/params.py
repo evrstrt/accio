@@ -118,16 +118,39 @@ class SegmentParams:
 
 @dataclass(frozen=True)
 class CalibParams:
-    """Measuring what "identical" scores on this walk, to set the threshold by.
+    """Two measurements per walk, so the threshold is a stated risk.
 
-    A kept frame and the raw frame straight after it are the same scene, so
-    what they score is the ceiling for "the same thing" with this camera, this
-    stitch and this backbone. The threshold sits at a low percentile of that,
-    so a merge needs two frames about as alike as a pair taken a frame apart.
+    The reference is a kept face against the raw frame straight after it: the
+    ceiling for "identical", and a health check on the stitch, the exposure and
+    the backbone. It does not set the threshold. Measured on GCMR, ASHV and
+    114811 (Aug 2026) it sits at 0.966 to 0.984, while faces one gated interval
+    apart score 0.70 to 0.91, so a threshold hung off the reference merges 4%
+    to 15% of genuinely adjacent pairs and select does almost nothing.
+
+    The far distribution sets it instead. Faces at one heading more than
+    far_seconds apart are somewhere else, so how many of those a threshold
+    merges is the risk it carries, and the budget names it directly.
+
+    The budget is generous on purpose. Merging two frames costs nothing
+    permanent: render_faces writes every face and the manifest only marks which
+    ones were kept, so an over-cut walk comes back with a lower budget. An
+    under-cut one has already been labelled, and that money does not come back.
+    Duplicates are also the expensive kind of wrong: an operator standing in a
+    stairwell for 30 seconds puts fifteen near-identical stairwell frames into
+    training and skews the model, not just the invoice.
+
+    What it cannot do is rescue a self-similar walk. Measured on 114811 (Aug
+    2026), cutting 148 faces to 67 moves the mean nearest-neighbour cosine in
+    the kept set from 0.949 to 0.904: the frames go, the redundancy stays,
+    because everything there genuinely looks alike. Sampling on distance is the
+    instrument for that. This one only decides what to keep of what was taken.
     """
 
-    samples: int = 10         # panoramas spread through the walk; x4 faces each
-    quantile: float = 5.0     # merge what is as alike as 95% of identical pairs
+    samples: int = 10             # panoramas the reference is measured on; x4
+    far_seconds: float = 20.0     # apart enough to be a different place
+    false_merge_pct: float = 5.0  # of far pairs allowed to merge; tau is the
+                                  # (100 - this) percentile of them. Cuts 44-59%
+                                  # on real walks, and every frame stays on disk
 
 
 @dataclass(frozen=True)
@@ -135,11 +158,11 @@ class DedupParams:
     """Greedy cosine dedup, per walk (cross-walk near-duplicates are different
     walls that look alike)."""
 
-    tau: float = 0.94         # sits in the measured gap: different walls 0.936,
-                              # same wall one step later 0.965
+    tau: float = 0.94         # a starting point, not a measurement: what it
+                              # merges depends entirely on the site
     rule: str = "fixed"       # "fixed" uses tau as given; "calibrated" takes it
-                              # from the walk's measured identical-content
-                              # reference and writes that value back into tau
+                              # from the walk's own far-apart pairs, at the
+                              # false-merge budget, and writes it back into tau
 
 
 @dataclass(frozen=True)
