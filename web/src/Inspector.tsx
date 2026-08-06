@@ -274,6 +274,10 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
             <Num value={gate.floor} step={0.05} min={0} max={0.95}
                  disabled={locked} onChange={(v) => edit('gate', 'floor', v)} />
           </Row>
+          <Row label="Dead">
+            <Num value={gate.dead} step={0.05} min={0} max={0.95}
+                 disabled={locked} onChange={(v) => edit('gate', 'dead', v)} />
+          </Row>
           <Row label="Band top">
             <Num value={gate.band[0]} step={0.05} min={0} max={1}
                  disabled={locked} onChange={(v) => edit('gate', 'band', [v, gate.band[1]])} />
@@ -284,10 +288,13 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
           </Row>
         </Group>
         <div className="insp-note">
-          A veto, not a thinner. A panorama scoring under {gate.floor.toFixed(2)} of the
-          sharpest within {((gate.window / 2) / p.extract.fps).toFixed(1)}s either side
-          is smeared past use and goes; everything else survives to Select, which
-          decides what ships against a budget you set.
+          A valve, not a knob. Floor drops a panorama under {gate.floor.toFixed(2)} of the
+          sharpest within {((gate.window / 2) / p.extract.fps).toFixed(1)}s either side,
+          which catches a lone smear; Dead drops anything under {gate.dead.toFixed(2)} of
+          the walk median, which catches a stretch smeared right through, where the
+          neighbours are no help. Both sit low deliberately. Select picks the sharpest
+          of each group anyway, so raising these does not sharpen the export, it
+          deletes coverage.
         </div>
         <Out>{s.sharp} legible of {s.panos} panos</Out>
       </>

@@ -37,21 +37,26 @@ class FaceParams:
 
 @dataclass(frozen=True)
 class GateParams:
-    """Motion-blur veto on panoramas.
+    """A safety valve on unusable footage, not a quality knob.
 
-    It does not thin the walk. Select does that, against a false-merge budget
-    somebody chose and can restate. This removes only what no labeller could
-    use, and a frame it passes still has to earn its place downstream.
+    Select owns quality. It groups by measured similarity and exports the
+    sharpest member of each group, so any frame with a sharper twin is already
+    handled and never reaches a labeller. What is left for this stage is
+    frames nothing can improve on, which is a much smaller job than it looks.
+
+    Measured, on the 7th Floor walk: at floor 0.40 this removed 16 of 562
+    panoramas and produced the identical 224-frame export as removing nothing
+    at all. Both defaults are therefore set low on purpose. Raising them buys
+    export sharpness by deleting coverage, which is Select's decision to make
+    against a stated budget, not this stage's to make by accident.
     """
 
     window: int = 9           # frames the local reference max spans, centred:
                               # at 2 fps, the two seconds either side
-    floor: float = 0.40       # below this fraction of the local max a frame is
-                              # smeared rather than merely flat. Deliberately
-                              # under 1/2.14, the gap between the sharpest and
-                              # dullest frame of a typical stretch, because
-                              # Select already picks the sharpest of each group:
-                              # this only has to catch unusable, not rank.
+    floor: float = 0.20       # against the neighbourhood: an isolated smear
+    dead: float = 0.15        # against the walk median: a stretch smeared
+                              # right through, where the local maximum is a
+                              # smear too and floor cannot see it
     band: tuple[float, float] = (0.25, 0.75)  # central latitude band; poles are
                               # projection stretch + helmet
 

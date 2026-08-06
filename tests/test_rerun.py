@@ -22,7 +22,7 @@ N_PANOS = 4
 BLURRED = 2                                     # the one smeared panorama
 PARAMS = PipelineParams(
     faces=FaceParams(size=32, yaws=(45, 225)),
-    gate=GateParams(floor=0.0),                 # veto nothing
+    gate=GateParams(floor=0.0, dead=0.0),       # veto nothing: both rules off
 )
 CALIB = {"tau": 0.94, "falseMergePct": 1.0, "farSeconds": 20.0, "samples": 10,
          "pairs": [], "healthy": True, "referenceError": "",

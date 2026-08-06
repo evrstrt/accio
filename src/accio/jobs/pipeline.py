@@ -215,8 +215,8 @@ def gate(panos: list, params: PipelineParams) -> list:
     """
     g = params.gate
     scores = [blur.score_pano(imread(p.path), g) for p in panos]
-    return [p for p, ok in zip(panos, blur.legible(scores, g.window, g.floor))
-            if ok]
+    ok = blur.legible(scores, g.window, g.floor, g.dead)
+    return [p for p, keep in zip(panos, ok) if keep]
 
 
 def render_faces(out: Path, sharp: list, params: PipelineParams) -> list[FaceRow]:

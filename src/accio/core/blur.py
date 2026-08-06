@@ -61,19 +61,26 @@ def local_max(scores: list[float], window: int) -> np.ndarray:
                      for i in range(len(s))])
 
 
-def legible(scores: list[float], window: int, floor: float) -> list[bool]:
-    """Which frames are sharp enough to be worth a labeller's time.
+def legible(scores: list[float], window: int, floor: float,
+            dead: float) -> list[bool]:
+    """Which frames are salvage, not which are good. Select judges good.
 
-    Relative to the neighbourhood, so a dim corridor is judged against the rest
-    of that corridor rather than against a bright bay fifty frames away.
+    Two rules, because they answer different questions and used to share one
+    number. `floor` is against the neighbourhood, and catches a smear between
+    sharp frames. `dead` is against the walk, and catches the case the first
+    one cannot see: a stretch where every frame is smeared, so the local
+    maximum is a smear too and the whole run certifies itself.
+
+    Both are deliberately low. Select picks the sharpest member of each group,
+    so anything with a sharper twin is already handled and never reaches a
+    labeller; what is left for these rules is frames nothing can improve on.
     """
     if not 0.0 <= floor < 1.0:
         raise ValueError("floor is a fraction of the local max, in [0, 1)")
+    if not 0.0 <= dead < 1.0:
+        raise ValueError("dead is a fraction of the walk median, in [0, 1)")
     if not scores:
         return []
     ref = local_max(scores, window)
-    # a stretch of frames that are all equally smeared has a local max that is
-    # itself a smear, and every one of them would pass. The walk median is the
-    # second opinion: nothing that dark is legible whatever its neighbours did.
-    absolute = float(np.median(scores)) * floor * floor
+    absolute = float(np.median(scores)) * dead
     return [bool(s >= r * floor and s >= absolute) for s, r in zip(scores, ref)]
