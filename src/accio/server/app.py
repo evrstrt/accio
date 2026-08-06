@@ -387,6 +387,7 @@ STAGE_OF = {"extract": "stitch", "gate": "gate", "faces": "faces",
 
 class GatePatch(BaseModel):
     window: int | None = Field(None, ge=1, le=120)
+    floor: float | None = Field(None, ge=0.0, lt=1.0)
     band: tuple[float, float] | None = None
 
 
@@ -436,6 +437,11 @@ def check(r: Rerun) -> None:
         if not 0 <= lo < hi <= 1:
             raise HTTPException(422, "the band must be a top below a bottom, "
                                      "both within the panorama")
+    if r.gate and r.gate.floor is not None and not 0 <= r.gate.floor < 1:
+        # at 1 only the local maximum survives, which is the windowed argmax
+        # this stage stopped being: thinning belongs to Select
+        raise HTTPException(422, "the blur floor is a fraction of the local "
+                                 "maximum, so it has to sit under 1")
     if r.faces and r.faces.yaws is not None:
         y = r.faces.yaws
         if not y or len(set(y)) != len(y) or any(not 0 <= v < 360 for v in y):

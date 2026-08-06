@@ -37,9 +37,21 @@ class FaceParams:
 
 @dataclass(frozen=True)
 class GateParams:
-    """Relative motion-blur gate on panoramas."""
+    """Motion-blur veto on panoramas.
 
-    window: int = 4           # at 2 fps: keep the sharpest pano per 2 s of walk
+    It does not thin the walk. Select does that, against a false-merge budget
+    somebody chose and can restate. This removes only what no labeller could
+    use, and a frame it passes still has to earn its place downstream.
+    """
+
+    window: int = 9           # frames the local reference max spans, centred:
+                              # at 2 fps, the two seconds either side
+    floor: float = 0.40       # below this fraction of the local max a frame is
+                              # smeared rather than merely flat. Deliberately
+                              # under 1/2.14, the gap between the sharpest and
+                              # dullest frame of a typical stretch, because
+                              # Select already picks the sharpest of each group:
+                              # this only has to catch unusable, not rank.
     band: tuple[float, float] = (0.25, 0.75)  # central latitude band; poles are
                               # projection stretch + helmet
 

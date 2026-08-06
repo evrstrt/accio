@@ -19,9 +19,10 @@ from accio.jobs import pipeline
 from accio.jobs.pipeline import rerun, run_walk
 
 N_PANOS = 4
+BLURRED = 2                                     # the one smeared panorama
 PARAMS = PipelineParams(
     faces=FaceParams(size=32, yaws=(45, 225)),
-    gate=GateParams(window=1),                  # keep every pano
+    gate=GateParams(floor=0.0),                 # veto nothing
 )
 CALIB = {"tau": 0.94, "falseMergePct": 1.0, "farSeconds": 20.0, "samples": 10,
          "pairs": [], "healthy": True, "referenceError": "",
@@ -37,7 +38,10 @@ def fake_stitch(video, pano_dir, params):
     frames = []
     for i in range(N_PANOS):
         path = pano_dir / pano_name(i)
-        cv2.imwrite(str(path), rng.integers(0, 255, (64, 128, 3), dtype=np.uint8))
+        img = rng.integers(0, 255, (64, 128, 3), dtype=np.uint8)
+        if i == BLURRED:
+            img = cv2.GaussianBlur(img, (9, 9), 3)
+        cv2.imwrite(str(path), img)
         frames.append(PanoFrame(index=i, t_sec=i * 15 / 29.97, path=path))
     extract.save_panos(pano_dir, frames)
     return frames
@@ -107,15 +111,34 @@ def test_rerun_from_faces_leaves_no_frames_from_the_old_settings(walk):
 
 
 def test_rerun_from_gate_rescores_and_changes_what_survives(walk):
+    """A stricter floor vetoes the smeared panorama and only that one.
+
+    What it must not do is thin the walk by a ratio. Three of four survive
+    because three of four are legible, not because a window said so.
+    """
     video, out = walk
-    coarse = replace(PARAMS, gate=GateParams(window=2))  # sharpest of every two
-    rerun(video, out, coarse, StubEmbedder(), "gate")
+    strict = replace(PARAMS, gate=GateParams(window=3, floor=0.40))
+    rerun(video, out, strict, StubEmbedder(), "gate")
 
     rows = pipeline.manifest_rows(out)
-    assert len({r["pano_idx"] for r in rows}) == N_PANOS // 2
-    assert len(rows) == (N_PANOS // 2) * 2
-    # the faces of the panoramas the coarser gate now rejects are gone
+    survivors = {int(r["pano_idx"]) for r in rows}
+    assert survivors == {0, 1, 3}               # BLURRED is gone, the rest stay
+    assert len(rows) == 3 * 2                   # two yaws each
+    # the faces of the panorama the floor now rejects are gone
     assert names(out / "faces") == sorted(r["path"] for r in rows)
+
+
+def test_the_gate_does_not_thin_by_a_ratio(walk):
+    """The property the windowed argmax could not have: widening the window
+    changes what the reference is, never how many frames come out."""
+    video, out = walk
+    counts = set()
+    for window in (3, 5, 9):
+        rerun(video, out, replace(PARAMS, gate=GateParams(window=window,
+                                                          floor=0.40)),
+              StubEmbedder(), "gate")
+        counts.add(len({r["pano_idx"] for r in pipeline.manifest_rows(out)}))
+    assert counts == {N_PANOS - 1}
 
 
 def test_rerun_from_select_keeps_the_faces_it_already_has(walk):

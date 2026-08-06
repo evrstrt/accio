@@ -74,7 +74,7 @@ export type Stages = {
 export type PipelineSpec = {
   extract: { fps: number; pano_width: number; sdk_image: string }
   faces: { fov_deg: number; size: number; yaws: number[] }
-  gate: { window: number; band: [number, number] }
+  gate: { window: number; floor: number; band: [number, number] }
   embed: { model_name: string; img_size: number; batch_size: number }
   calib: { samples: number; far_seconds: number; false_merge_pct: number }
   dedup: { tau: number; rule: string }
@@ -238,7 +238,7 @@ export type MetaEdit = {
 
 export type Pending = {
   meta?: MetaEdit
-  gate?: { window?: number; band?: [number, number] }
+  gate?: { window?: number; floor?: number; band?: [number, number] }
   faces?: { fov_deg?: number; size?: number; yaws?: number[] }
   embed?: { model_name?: string; batch_size?: number }
   calib?: { samples?: number; far_seconds?: number; false_merge_pct?: number }

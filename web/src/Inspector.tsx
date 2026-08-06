@@ -262,13 +262,17 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
         <Group title="component">
           <Row label="Score"><Fixed value="variance of Laplacian"
                                     options={['variance of Laplacian', 'Tenengrad']} /></Row>
-          <Row label="Rule"><Fixed value="sharpest per window"
-                                   options={['sharpest per window', 'absolute threshold', 'none']} /></Row>
+          <Row label="Rule"><Fixed value="veto below local max"
+                                   options={['veto below local max', 'absolute threshold', 'none']} /></Row>
         </Group>
         <Group title="settings">
-          <Row label="Window">
+          <Row label="Reference window">
             <Num value={gate.window} min={1} max={120}
                  disabled={locked} onChange={(v) => edit('gate', 'window', Math.round(v))} />
+          </Row>
+          <Row label="Floor">
+            <Num value={gate.floor} step={0.05} min={0} max={0.95}
+                 disabled={locked} onChange={(v) => edit('gate', 'floor', v)} />
           </Row>
           <Row label="Band top">
             <Num value={gate.band[0]} step={0.05} min={0} max={1}
@@ -280,10 +284,12 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
           </Row>
         </Group>
         <div className="insp-note">
-          One panorama per window survives, so the window sets the spacing:
-          {' '}{(gate.window / p.extract.fps).toFixed(1)}s of walk each.
+          A veto, not a thinner. A panorama scoring under {gate.floor.toFixed(2)} of the
+          sharpest within {((gate.window / 2) / p.extract.fps).toFixed(1)}s either side
+          is smeared past use and goes; everything else survives to Select, which
+          decides what ships against a budget you set.
         </div>
-        <Out>{s.sharp} sharp of {s.panos} panos</Out>
+        <Out>{s.sharp} legible of {s.panos} panos</Out>
       </>
     )
   }

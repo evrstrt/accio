@@ -208,10 +208,15 @@ def imread(path: Path):
 
 
 def gate(panos: list, params: PipelineParams) -> list:
-    """The sharpest panorama per window; the rest were walked through."""
-    scores = [blur.score_pano(imread(p.path), params.gate) for p in panos]
-    return [p for p, keep in zip(panos, blur.windowed_keep(scores, params.gate.window))
-            if keep]
+    """Every panorama a labeller could work with, which is nearly all of them.
+
+    This used to keep one panorama in four and call it a blur gate. What
+    survives here is the walk; what ships is decided by Select.
+    """
+    g = params.gate
+    scores = [blur.score_pano(imread(p.path), g) for p in panos]
+    return [p for p, ok in zip(panos, blur.legible(scores, g.window, g.floor))
+            if ok]
 
 
 def render_faces(out: Path, sharp: list, params: PipelineParams) -> list[FaceRow]:
