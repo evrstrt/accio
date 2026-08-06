@@ -1,17 +1,19 @@
-"""The blur stage vetoes; it does not thin.
+"""Sharpness, and the two comparisons it is allowed to make.
 
-The property that matters is not which frames it drops but that the number it
-keeps is a fact about the footage rather than about the parameters. The old
-windowed argmax kept frames-in over four whatever the walk looked like, which
-is how 421 of 562 panoramas were discarded on a walk where 93 of them were
-sharper than the median frame that survived.
+Variance of Laplacian measures blur and texture together, so the raw number
+cannot tell "this frame is ruined" from "this wall is plain". Every test here
+is really about that: whether a comparison holds the wall constant.
+
+The gate keeps one blunt rule for footage that arrived broken. The comparison
+that does the work lives in Select, where a group is one place by construction
+and the texture cancels for free.
 """
 
 import cv2
 import numpy as np
 import pytest
 
-from accio.core.blur import (central_band, legible, local_max, score_pano,
+from accio.core.blur import (central_band, heading_ratio, legible, score_pano,
                              vol_score)
 from accio.core.params import GateParams
 
@@ -36,99 +38,104 @@ def test_score_pano_runs_on_bgr():
     assert score_pano(bgr, GateParams()) > 0
 
 
-# --- the reference ---------------------------------------------------------
-
-def test_local_max_is_centred_not_trailing():
-    """A smear is bracketed by sharp frames; a trailing window only sees in."""
-    assert list(local_max([1.0, 9.0, 1.0], window=3)) == [9.0, 9.0, 9.0]
-
-
-def test_local_max_clips_at_the_ends_rather_than_padding():
-    assert list(local_max([5.0, 1.0, 1.0, 1.0, 1.0], window=3)) == \
-        [5.0, 5.0, 1.0, 1.0, 1.0]
-
-
-def test_local_max_of_one_is_the_frame_itself():
-    assert list(local_max([3.0, 7.0], window=1)) == [3.0, 7.0]
-
-
-# --- the veto --------------------------------------------------------------
+# --- the gate: broken footage only -----------------------------------------
 
 def test_a_sharp_walk_loses_nothing():
     """The point of the rewrite. Uniformly sharp footage keeps every frame,
-    where the argmax kept a quarter of it."""
-    scores = [100.0, 110.0, 95.0, 105.0, 98.0, 102.0, 99.0, 101.0]
-    assert legible(scores, window=9, floor=0.40, dead=0.15) == [True] * 8
+    where the old windowed argmax kept a quarter of it."""
+    assert legible([100.0, 110.0, 95.0, 105.0, 98.0, 102.0], dead=0.15) == \
+        [True] * 6
 
 
-def test_a_smear_between_sharp_frames_is_vetoed():
-    scores = [100.0, 100.0, 12.0, 100.0, 100.0]
-    assert legible(scores, window=5, floor=0.40, dead=0.15) == \
-        [True, True, False, True, True]
-
-
-def test_flat_but_legible_survives():
-    """Bare concrete scores low everywhere. Judged against its neighbours it
-    is fine, which is the whole reason the reference is local."""
-    scores = [40.0, 38.0, 41.0, 39.0, 40.0]
-    assert all(legible(scores, window=5, floor=0.40, dead=0.15))
-
-
-def test_a_run_of_smears_does_not_certify_itself():
-    """The local max inside a long smear is a smear, so the neighbourhood
-    rule alone would pass all of it. The walk median is the second opinion."""
+def test_a_stretch_smeared_right_through_is_dropped():
+    """The one case nothing downstream catches: these frames group with each
+    other, because blur is what they have in common, and Select would then
+    export a smear as the sharpest of them."""
     scores = [200.0] * 6 + [3.0, 2.5, 3.2, 2.8] + [200.0] * 6
-    got = legible(scores, window=3, floor=0.40, dead=0.15)
+    got = legible(scores, dead=0.15)
     assert got[6:10] == [False] * 4
     assert all(got[:6]) and all(got[10:])
 
 
-def test_the_count_follows_the_footage_not_the_window():
-    """The property the old gate did not have: same frames, any window, and
-    the number that survive does not move."""
-    scores = [100.0, 95.0, 11.0, 98.0, 103.0, 97.0, 9.0, 99.0]
-    counts = {w: sum(legible(scores, window=w, floor=0.40, dead=0.15)) for w in (3, 5, 9, 21)}
+def test_a_lone_smear_is_left_for_select():
+    """Not this stage's job. A smear between sharp frames either joins a group
+    and loses the exemplar contest, or fails to and is judged by heading."""
+    assert all(legible([100.0, 100.0, 45.0, 100.0, 100.0], dead=0.15))
+
+
+def test_the_count_follows_the_footage_not_the_parameters():
+    """The property the windowed argmax could not have."""
+    scores = [100.0, 95.0, 2.0, 98.0, 103.0, 97.0, 1.0, 99.0]
+    counts = {d: sum(legible(scores, dead=d)) for d in (0.05, 0.1, 0.15, 0.2)}
     assert set(counts.values()) == {6}
 
 
-def test_floor_of_zero_vetoes_nothing():
-    assert all(legible([100.0, 0.0, 50.0], window=3, floor=0.0, dead=0.0))
+def test_dead_of_zero_vetoes_nothing():
+    assert all(legible([100.0, 0.0, 50.0], dead=0.0))
 
 
-def test_the_two_rules_catch_different_things():
-    """Why they stopped sharing a number. floor sees a smear its neighbours
-    disown; dead sees a smear its neighbours agree with."""
-    lone = [100.0, 100.0, 20.0, 100.0, 100.0]
-    run = [100.0] * 3 + [4.0] * 5 + [100.0] * 3
-
-    # floor catches the lone smear
-    assert not legible(lone, window=5, floor=0.40, dead=0.0)[2]
-    # but only the ENDS of the run, where a sharp neighbour is still in view.
-    # Its interior compares itself to itself and passes, which is the hole.
-    assert legible(run, window=3, floor=0.40, dead=0.0)[3:8] == \
-        [False, True, True, True, False]
-
-    # dead closes it: measured against the walk, the whole run goes
-    assert legible(run, window=3, floor=0.0, dead=0.15)[3:8] == [False] * 5
-    # and it leaves the lone smear alone, which is floor's job, not its own
-    assert all(legible(lone, window=5, floor=0.0, dead=0.15))
-
-
-def test_the_defaults_are_a_valve_not_a_knob():
-    """Shipped settings on plausible footage: nothing goes. Measured on the
-    real walk too, where 0.20/0.15 removes nothing the export would notice."""
-    g = GateParams()
-    rng = np.random.default_rng(1)
-    walk = list(100.0 + rng.normal(0, 25, 200).clip(-70, None))
-    assert all(legible(walk, g.window, g.floor, g.dead))
-
-
-def test_a_floor_at_or_above_one_is_refused():
-    """At 1 only the local maximum survives, which is the argmax again."""
+def test_a_dead_at_or_above_one_is_refused():
     with pytest.raises(ValueError):
-        legible([1.0, 2.0], window=3, floor=1.0, dead=0.15)
+        legible([1.0, 2.0], dead=1.0)
 
 
 def test_empty_and_single_frame_walks():
-    assert legible([], window=9, floor=0.40, dead=0.15) == []
-    assert legible([42.0], window=9, floor=0.40, dead=0.15) == [True]
+    assert legible([], dead=0.15) == []
+    assert legible([42.0], dead=0.15) == [True]
+
+
+def test_the_shipped_gate_is_a_valve():
+    """Plausible footage, shipped setting, nothing goes."""
+    g = GateParams()
+    walk = list(100.0 + RNG.normal(0, 25, 200).clip(-70, None))
+    assert all(legible(walk, g.dead))
+
+
+# --- the heading ratio: what cancels the texture ----------------------------
+
+def test_a_plain_wall_is_not_punished_for_being_plain():
+    """The whole reason this exists. One heading faces a busy wall and scores
+    high, another faces bare concrete and scores low, and both are pin-sharp.
+    An absolute threshold picks the bare wall off; a per-heading one does not.
+    """
+    yaw = np.array([45, 135] * 5)
+    t = np.repeat(np.arange(5.0), 2)
+    sharp = np.array([200.0, 40.0] * 5)          # busy heading, plain heading
+    r = heading_ratio(sharp, yaw, t, span=45.0)
+    assert np.allclose(r, 1.0)                   # neither is called blurred
+
+
+def test_a_smear_shows_up_against_its_own_heading():
+    yaw = np.array([45] * 5)
+    t = np.arange(5.0)
+    sharp = np.array([100.0, 100.0, 25.0, 100.0, 100.0])
+    r = heading_ratio(sharp, yaw, t, span=45.0)
+    assert r[2] == pytest.approx(0.25)
+    assert np.allclose(r[[0, 1, 3, 4]], 1.0)
+
+
+def test_headings_are_judged_separately():
+    """A busy heading must not set the bar for a plain one."""
+    yaw = np.array([45, 135, 45, 135])
+    t = np.array([0.0, 0.0, 1.0, 1.0])
+    sharp = np.array([200.0, 50.0, 100.0, 25.0])
+    r = heading_ratio(sharp, yaw, t, span=45.0)
+    # each is half of its own heading's median, not of the walk's
+    assert r[2] == pytest.approx(2 / 3)
+    assert r[3] == pytest.approx(2 / 3)
+
+
+def test_the_span_keeps_a_distant_room_out_of_it():
+    """Sharpness drifts across a building; the norm should be local in time."""
+    yaw = np.array([45] * 6)
+    t = np.array([0.0, 1.0, 2.0, 500.0, 501.0, 502.0])
+    sharp = np.array([100.0, 100.0, 100.0, 20.0, 20.0, 20.0])
+    r = heading_ratio(sharp, yaw, t, span=45.0)
+    assert np.allclose(r, 1.0)      # each trio is normal where it sits
+    wide = heading_ratio(sharp, yaw, t, span=1000.0)
+    assert not np.allclose(wide, 1.0)
+
+
+def test_a_zero_reference_does_not_divide_by_zero():
+    r = heading_ratio(np.zeros(3), np.array([45] * 3), np.arange(3.0), span=45.0)
+    assert np.allclose(r, 1.0)

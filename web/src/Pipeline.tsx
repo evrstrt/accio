@@ -59,10 +59,10 @@ const BLOCKS: Block[] = [
   {
     id: 'gate',
     title: 'Gate',
-    sub: (w) => `sharpest per ${w.pipeline.gate.window}`,
-    stat: (w) => `${w.stages.sharp} sharp`,
-    live: (c) => (c.sharp ? `${c.sharp} sharp` : ''),
-    idle: 'sharpest per window',
+    sub: (w) => `drop under ${w.pipeline.gate.dead.toFixed(2)}× median`,
+    stat: (w) => `${w.stages.sharp} legible`,
+    live: (c) => (c.sharp ? `${c.sharp} legible` : ''),
+    idle: 'unusable footage only',
   },
   {
     id: 'faces',

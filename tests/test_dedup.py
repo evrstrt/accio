@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from accio.core.dedup import greedy_dedup, sharpest
+from accio.core.dedup import drop_solo, greedy_dedup, sharpest
 from accio.core.embed import l2_normalise
 from accio.core.params import DedupParams
 
@@ -134,3 +134,57 @@ def test_every_group_gets_exactly_one_pick_from_its_own_members():
         for anchor, pick in picks.items():
             members = {anchor} | {i for i, _c in result.group_of[anchor]}
             assert pick in members
+
+
+# --- groups of one: the only route a smear has to a labeller ---------------
+
+def solo_case():
+    """Four faces. 0 and 1 are one place seen twice, 2 and 3 are seen once
+    each; 2 is sharp and 3 is a smear."""
+    emb = unit([1, 0, 0], [1, 0.05, 0], [0, 1, 0], [0, 0, 1])
+    result = greedy_dedup(emb, P94)
+    assert result.kept == [0, 2, 3]              # 1 absorbed into 0
+    return result
+
+
+def test_a_smear_with_a_sharper_twin_is_never_the_solo_rule_s_problem():
+    """It loses the exemplar contest instead, which needs no threshold."""
+    result = solo_case()
+    sharp = np.array([10.0, 90.0, 80.0, 5.0])
+    picks = sharpest(result, sharp)
+    assert picks[0] == 1                         # the group exports its best
+    ratio = np.array([1.0, 1.0, 1.0, 0.1])
+    kept = drop_solo(result, ratio, picks, floor=0.5)
+    assert 0 in kept.kept                        # the group survives regardless
+
+
+def test_a_smear_that_is_alone_goes():
+    result = solo_case()
+    picks = sharpest(result, np.array([10.0, 90.0, 80.0, 5.0]))
+    kept = drop_solo(result, ratio=np.array([1.0, 1.0, 1.0, 0.1]),
+                     picks=picks, floor=0.5)
+    assert kept.kept == [0, 2]                   # 3 was alone and smeared
+
+
+def test_a_plain_wall_seen_once_stays():
+    """Its ratio is against its own heading, so being plain is not being blurred."""
+    result = solo_case()
+    picks = sharpest(result, np.array([10.0, 90.0, 80.0, 5.0]))
+    kept = drop_solo(result, ratio=np.array([1.0, 1.0, 1.0, 0.95]),
+                     picks=picks, floor=0.5)
+    assert kept.kept == [0, 2, 3]
+
+
+def test_a_floor_of_zero_drops_nothing():
+    result = solo_case()
+    picks = sharpest(result, np.array([10.0, 90.0, 80.0, 5.0]))
+    assert drop_solo(result, np.zeros(4), picks, floor=0.0) is result
+
+
+def test_dropping_a_solo_leaves_the_other_groups_intact():
+    """Its members must still point at their anchors afterwards."""
+    result = solo_case()
+    picks = sharpest(result, np.array([10.0, 90.0, 80.0, 5.0]))
+    kept = drop_solo(result, np.array([1.0, 1.0, 1.0, 0.1]), picks, floor=0.5)
+    assert kept.anchor_of == result.anchor_of
+    assert kept.group_of[0] == [(1, pytest.approx(result.anchor_of[1][1]))]

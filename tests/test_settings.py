@@ -7,6 +7,7 @@ either the frames go stale or a threshold tweak re-stitches the walk.
 import pytest
 from dataclasses import replace
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from accio.core.params import PipelineParams
 from accio.server.app import Rerun, check, merge
@@ -25,14 +26,14 @@ def test_a_threshold_change_only_reselects():
 def test_the_earliest_stage_wins():
     _, first, changed = merge(PipelineParams(),
                               patch(dedup={"tau": 0.96}, faces={"fov_deg": 120},
-                                    gate={"window": 8}))
+                                    gate={"dead": 0.3}))
     assert first == "gate"
-    assert changed == {"dedup.tau", "faces.fov_deg", "gate.window"}
+    assert changed == {"dedup.tau", "faces.fov_deg", "gate.dead"}
 
 
 def test_setting_a_value_back_is_not_a_change():
     p = PipelineParams()
-    params, first, _ = merge(p, patch(gate={"window": p.gate.window},
+    params, first, _ = merge(p, patch(gate={"dead": p.gate.dead},
                                       dedup={"tau": p.dedup.tau}))
     assert first is None
     assert params == p
@@ -72,3 +73,27 @@ def test_settings_that_would_not_survive_the_pipeline_are_refused(bad):
     with pytest.raises(HTTPException) as e:
         check(patch(**bad))
     assert e.value.status_code == 422
+
+
+def test_the_solo_floor_only_reselects():
+    """It is a Select decision, so it must not re-run the stitch or the GPU."""
+    params, first, _ = merge(PipelineParams(), patch(dedup={"solo_floor": 0.3}))
+    assert first == "select"
+    assert params.dedup.solo_floor == 0.3
+
+
+def test_the_gate_threshold_reruns_from_the_gate():
+    params, first, _ = merge(PipelineParams(), patch(gate={"dead": 0.3}))
+    assert first == "gate"
+    assert params.gate.dead == 0.3
+
+
+@pytest.mark.parametrize("bad", [
+    {"dedup": {"solo_floor": 1.0}},          # at 1 every group of one goes
+    {"gate": {"dead": 1.0}},                 # and here, every frame
+])
+def test_thresholds_that_would_empty_the_walk_are_refused(bad):
+    """Caught at the model boundary, not in check(): these are single-field
+    bounds and Field() already holds them, which is a 422 either way."""
+    with pytest.raises(ValidationError):
+        patch(**bad)

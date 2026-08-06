@@ -27,7 +27,7 @@ import numpy as np
 from ..core import (atomic, blur, calibrate as calibrate_mod, extract, faces,
                     segment as segment_mod)
 from ..core.calibrate import calibrate
-from ..core.dedup import greedy_dedup, sharpest
+from ..core.dedup import drop_solo, greedy_dedup, sharpest
 from ..core.embed import Embedder
 from ..core.params import PipelineParams
 
@@ -165,11 +165,11 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     params = apply_rule(params, calib)
     result = greedy_dedup(embeddings, params.dedup,
                           np.array([p for p, _, _, _ in named]))
-    picks = sharpest(result, np.asarray(sharpness, dtype=float))
+    result, picks, solo = select(embeddings, named, sharpness, params)
     write_manifest(out / "manifest.csv", named, result, sharpness, picks)
     save_params(out, params)
     kept = len(result.kept)
-    say("select", "done", anchors=kept, absorbed=len(records) - kept)
+    say("select", "done", anchors=kept, absorbed=len(records) - kept, solo=solo)
 
     # what is in the frames that survived. Annotation only: it runs after the
     # set is decided and never changes it, so a wrong mask costs a correction
@@ -188,7 +188,7 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     elif start <= STAGES.index("segment"):
         clear_segmentation(out)
 
-    log_run(out, params, calib, first, len(records), kept,
+    log_run(out, params, calib, first, len(records), kept, solo,
             getattr(say, "seconds", {}))
     clear_failure(out)     # this walk ran through; whatever broke before is past
     return dict(walk=out.name, faces=len(records), anchors=kept,
@@ -215,8 +215,7 @@ def gate(panos: list, params: PipelineParams) -> list:
     """
     g = params.gate
     scores = [blur.score_pano(imread(p.path), g) for p in panos]
-    ok = blur.legible(scores, g.window, g.floor, g.dead)
-    return [p for p, keep in zip(panos, ok) if keep]
+    return [p for p, keep in zip(panos, blur.legible(scores, g.dead)) if keep]
 
 
 def render_faces(out: Path, sharp: list, params: PipelineParams) -> list[FaceRow]:
@@ -363,7 +362,7 @@ def read_failure(out: Path) -> dict | None:
 
 
 def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,
-            faces: int, anchors: int,
+            faces: int, anchors: int, solo: int = 0,
             seconds: dict[str, float] | None = None) -> None:
     """Append what this configuration produced.
 
@@ -390,6 +389,9 @@ def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,
         "faces": faces,
         "anchors": anchors,
         "absorbed": faces - anchors,
+        # groups of one this run refused as unusable: a coverage cost, so it
+        # belongs beside what the run produced rather than nowhere
+        "solo": solo,
         # what it cost, per stage: the other half of what a run produced
         "seconds": seconds or {},
     }
@@ -500,6 +502,32 @@ def save_params(out: Path, params: PipelineParams) -> None:
     atomic.write_json(out / "params.json", asdict(params), indent=1)
 
 
+def select(embeddings: np.ndarray, named: list, sharpness: list,
+           params: PipelineParams) -> tuple:
+    """Which faces ship, and which frame represents each of them.
+
+    One function because there are two ways in, the full run and reselect's
+    fast path, and a rule that lived in only one of them would mean the cheap
+    re-run quietly disagreed with the expensive one.
+
+    Returns (result, anchor -> exported frame, how many groups of one were
+    dropped for being smeared).
+    """
+    scores = np.asarray(sharpness, dtype=float)
+    result = greedy_dedup(embeddings, params.dedup,
+                          np.array([p for p, _, _, _ in named]))
+    picks = sharpest(result, scores)
+    # the one place a sharpness threshold belongs: a group of one has no
+    # sharper member to be swapped for, so nothing downstream can save it
+    ratio = blur.heading_ratio(scores,
+                               np.array([y for _, _, y, _ in named]),
+                               np.array([t for _, t, _, _ in named]),
+                               params.dedup.solo_span)
+    before = len(result.kept)
+    result = drop_solo(result, ratio, picks, params.dedup.solo_floor)
+    return result, sharpest(result, scores), before - len(result.kept)
+
+
 def reselect(walk_out: Path, params: PipelineParams) -> dict:
     """Re-run selection alone, from the embeddings already on disk.
 
@@ -525,15 +553,14 @@ def reselect(walk_out: Path, params: PipelineParams) -> dict:
 
     calib = read_calibration(walk_out)
     params = apply_rule(params, calib)
-    result = greedy_dedup(embeddings, params.dedup,
-                          np.array([int(r["pano_idx"]) for r in rows]))
-    write_manifest(walk_out / "manifest.csv",
-                   [(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]), r["path"])
-                    for r in rows], result,
-                   [float(r["sharpness"]) for r in rows])
+    named = [(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]), r["path"])
+             for r in rows]
+    sharpness = [float(r["sharpness"]) for r in rows]
+    result, picks, solo = select(embeddings, named, sharpness, params)
+    write_manifest(walk_out / "manifest.csv", named, result, sharpness, picks)
     save_params(walk_out, params)
     clear_segmentation(walk_out)
     kept = len(result.kept)
-    log_run(walk_out, params, calib, "select", len(rows), kept)
+    log_run(walk_out, params, calib, "select", len(rows), kept, solo)
     return dict(faces=len(rows), anchors=kept, absorbed=len(rows) - kept,
-                tau=params.dedup.tau, rule=params.dedup.rule)
+                solo=solo, tau=params.dedup.tau, rule=params.dedup.rule)

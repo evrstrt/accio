@@ -262,18 +262,10 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
         <Group title="component">
           <Row label="Score"><Fixed value="variance of Laplacian"
                                     options={['variance of Laplacian', 'Tenengrad']} /></Row>
-          <Row label="Rule"><Fixed value="veto below local max"
-                                   options={['veto below local max', 'absolute threshold', 'none']} /></Row>
+          <Row label="Rule"><Fixed value="drop the unusable"
+                                   options={['drop the unusable', 'sharpest per window', 'none']} /></Row>
         </Group>
         <Group title="settings">
-          <Row label="Reference window">
-            <Num value={gate.window} min={1} max={120}
-                 disabled={locked} onChange={(v) => edit('gate', 'window', Math.round(v))} />
-          </Row>
-          <Row label="Floor">
-            <Num value={gate.floor} step={0.05} min={0} max={0.95}
-                 disabled={locked} onChange={(v) => edit('gate', 'floor', v)} />
-          </Row>
           <Row label="Dead">
             <Num value={gate.dead} step={0.05} min={0} max={0.95}
                  disabled={locked} onChange={(v) => edit('gate', 'dead', v)} />
@@ -288,13 +280,13 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
           </Row>
         </Group>
         <div className="insp-note">
-          A valve, not a knob. Floor drops a panorama under {gate.floor.toFixed(2)} of the
-          sharpest within {((gate.window / 2) / p.extract.fps).toFixed(1)}s either side,
-          which catches a lone smear; Dead drops anything under {gate.dead.toFixed(2)} of
-          the walk median, which catches a stretch smeared right through, where the
-          neighbours are no help. Both sit low deliberately. Select picks the sharpest
-          of each group anyway, so raising these does not sharpen the export, it
-          deletes coverage.
+          A valve for footage that arrived broken, not a quality knob. It drops a
+          panorama under {gate.dead.toFixed(2)} of the walk's median sharpness, which
+          catches a stretch smeared right through: those frames group with each other,
+          because blur is what they share, and Select would export a smear as the best
+          of them. Nothing else is judged here. This score mixes all four headings and
+          rates a plain wall low whether or not it is sharp, so raising it deletes
+          coverage rather than buying sharpness.
         </div>
         <Out>{s.sharp} legible of {s.panos} panos</Out>
       </>
@@ -484,6 +476,10 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
             />
           </Row>
           <Row label="Scope"><Fixed value="per walk" options={['per walk', 'across walks']} /></Row>
+          <Row label="Solo floor">
+            <Num value={dedup.solo_floor} step={0.05} min={0} max={0.95}
+                 disabled={locked} onChange={(v) => edit('dedup', 'solo_floor', v)} />
+          </Row>
         </Group>
         <div className="insp-note">
           {dedup.rule === 'calibrated'
@@ -491,6 +487,15 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
                 this walk at {s.calibTau}.</>
             : <>A cosine means nothing on its own. Calibrate measured identical
                 frames on this walk at {s.reference}.</>}
+        </div>
+        <div className="insp-note">
+          A group exports its sharpest member, so blur is handled wherever there is a
+          group. A group of one has no such choice, and is the only way an unusable
+          frame reaches a labeller. Solo floor drops those scoring under{' '}
+          {(dedup.solo_floor ?? 0).toFixed(2)} of what their own heading normally scores,
+          which is the comparison that cancels a wall's texture. Set it to 0 to keep
+          every one; each drop costs a view nothing else in the walk resembles.
+          {s.solo ? <> This run dropped {s.solo}.</> : null}
         </div>
         {walk.runs.length > 1 && (
           <Group title="what each run gave">

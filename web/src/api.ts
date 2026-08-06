@@ -65,6 +65,7 @@ export type Stages = {
   classMix: { name: string; share: number }[]
   anchors: number
   absorbed: number
+  solo: number          // groups of one dropped for being smeared
   dropped: number
   overridden: number     // groups where a human swapped the auto pick
   kept: number
@@ -74,10 +75,10 @@ export type Stages = {
 export type PipelineSpec = {
   extract: { fps: number; pano_width: number; sdk_image: string }
   faces: { fov_deg: number; size: number; yaws: number[] }
-  gate: { window: number; floor: number; dead: number; band: [number, number] }
+  gate: { dead: number; band: [number, number] }
   embed: { model_name: string; img_size: number; batch_size: number }
   calib: { samples: number; far_seconds: number; false_merge_pct: number }
-  dedup: { tau: number; rule: string }
+  dedup: { tau: number; rule: string; solo_floor: number; solo_span: number }
   segment: {
     enabled: boolean
     model_name: string
@@ -102,6 +103,7 @@ export type Run = {
   faces: number
   anchors: number
   absorbed: number
+  solo: number          // groups of one dropped for being smeared
 }
 
 export type WalkDetail = {
@@ -238,11 +240,11 @@ export type MetaEdit = {
 
 export type Pending = {
   meta?: MetaEdit
-  gate?: { window?: number; floor?: number; dead?: number; band?: [number, number] }
+  gate?: { dead?: number; band?: [number, number] }
   faces?: { fov_deg?: number; size?: number; yaws?: number[] }
   embed?: { model_name?: string; batch_size?: number }
   calib?: { samples?: number; far_seconds?: number; false_merge_pct?: number }
-  dedup?: { tau?: number; rule?: 'fixed' | 'calibrated' }
+  dedup?: { tau?: number; rule?: 'fixed' | 'calibrated'; solo_floor?: number }
   segment?: {
     enabled?: boolean
     model_name?: string

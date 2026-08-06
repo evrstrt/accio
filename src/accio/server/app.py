@@ -340,6 +340,10 @@ def stage_counts(walk_id: str, rows: list[dict], state: dict) -> dict:
         "classMix": top_classes(seg_classes),
         "anchors": anchors,
         "absorbed": len(rows) - anchors,
+        # groups of one the last run refused as unusable. Read from the run
+        # record rather than the manifest: a dropped solo leaves no row behind,
+        # so the manifest cannot say it ever existed.
+        "solo": (pipeline.read_runs(walk_dir(walk_id), 1) or [{}])[0].get("solo", 0),
         "dropped": dropped,
         "overridden": overridden,
         "kept": anchors - dropped,
@@ -386,8 +390,6 @@ STAGE_OF = {"extract": "stitch", "gate": "gate", "faces": "faces",
 
 
 class GatePatch(BaseModel):
-    window: int | None = Field(None, ge=1, le=120)
-    floor: float | None = Field(None, ge=0.0, lt=1.0)
     dead: float | None = Field(None, ge=0.0, lt=1.0)
     band: tuple[float, float] | None = None
 
@@ -419,6 +421,8 @@ class SegmentPatch(BaseModel):
 class DedupPatch(BaseModel):
     tau: float | None = Field(None, gt=0, lt=1)
     rule: str | None = None      # 'fixed' | 'calibrated'
+    solo_floor: float | None = Field(None, ge=0.0, lt=1.0)
+    solo_span: float | None = Field(None, gt=0)
 
 
 class Rerun(BaseModel):
@@ -438,14 +442,8 @@ def check(r: Rerun) -> None:
         if not 0 <= lo < hi <= 1:
             raise HTTPException(422, "the band must be a top below a bottom, "
                                      "both within the panorama")
-    if r.gate and r.gate.floor is not None and not 0 <= r.gate.floor < 1:
-        # at 1 only the local maximum survives, which is the windowed argmax
-        # this stage stopped being: thinning belongs to Select
-        raise HTTPException(422, "the blur floor is a fraction of the local "
-                                 "maximum, so it has to sit under 1")
-    if r.gate and r.gate.dead is not None and not 0 <= r.gate.dead < 1:
-        raise HTTPException(422, "the dead threshold is a fraction of the walk "
-                                 "median, so it has to sit under 1")
+    # gate.dead and dedup.solo_floor are single-field bounds, so their Field()
+    # constraints hold them; this function is for the rules that span fields
     if r.faces and r.faces.yaws is not None:
         y = r.faces.yaws
         if not y or len(set(y)) != len(y) or any(not 0 <= v < 360 for v in y):

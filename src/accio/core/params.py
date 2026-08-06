@@ -37,26 +37,21 @@ class FaceParams:
 
 @dataclass(frozen=True)
 class GateParams:
-    """A safety valve on unusable footage, not a quality knob.
+    """A valve on footage that arrived broken. Select owns quality.
 
-    Select owns quality. It groups by measured similarity and exports the
-    sharpest member of each group, so any frame with a sharper twin is already
-    handled and never reaches a labeller. What is left for this stage is
-    frames nothing can improve on, which is a much smaller job than it looks.
+    One threshold, because a panorama score mixes all four headings and cannot
+    tell a plain wall from a smeared one. It catches the single case nothing
+    downstream can: a stretch smeared right through, whose frames group with
+    each other because blur is what they share, leaving Select to export a
+    smear as the sharpest of them.
 
-    Measured, on the 7th Floor walk: at floor 0.40 this removed 16 of 562
-    panoramas and produced the identical 224-frame export as removing nothing
-    at all. Both defaults are therefore set low on purpose. Raising them buys
-    export sharpness by deleting coverage, which is Select's decision to make
-    against a stated budget, not this stage's to make by accident.
+    Measured on the 7th Floor walk, this vetoes nothing and the export is the
+    same 224 frames as with the stage switched off. That is the intended
+    result. Raising it does not sharpen the export, it deletes coverage.
     """
 
-    window: int = 9           # frames the local reference max spans, centred:
-                              # at 2 fps, the two seconds either side
-    floor: float = 0.20       # against the neighbourhood: an isolated smear
-    dead: float = 0.15        # against the walk median: a stretch smeared
-                              # right through, where the local maximum is a
-                              # smear too and floor cannot see it
+    dead: float = 0.15        # of the walk's median sharpness; under it a
+                              # panorama is not worth cutting faces from
     band: tuple[float, float] = (0.25, 0.75)  # central latitude band; poles are
                               # projection stretch + helmet
 
@@ -180,6 +175,14 @@ class DedupParams:
     rule: str = "fixed"       # "fixed" uses tau as given; "calibrated" takes it
                               # from the walk's own far-apart pairs, at the
                               # false-merge budget, and writes it back into tau
+
+    # A frame absorbed by nobody has no sharper twin to be swapped for, so it
+    # is the one route by which a smear reaches a labeller. Judged against the
+    # recent norm of its own heading, which is what cancels the wall's texture.
+    # Measured on 7th Floor: 17 of 224 exports are alone, median ratio 0.87
+    # against 1.00 walk-wide, and this bar drops 2 of them.
+    solo_floor: float = 0.50  # of its heading's norm; 0 keeps every singleton
+    solo_span: float = 45.0   # seconds either side that norm is taken over
 
 
 @dataclass(frozen=True)

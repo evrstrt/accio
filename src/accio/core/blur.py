@@ -1,26 +1,30 @@
-"""Stage 3: motion-blur veto.
+"""Sharpness, and the two places it is allowed to decide anything.
 
-Two independent questions run through this pipeline. Is a frame legible at all
-(a property of that frame, which is this stage), and does it show anything the
-set does not already have (a property of the set, which is Select). This stage
-answers only the first, and in particular it does not decide how many frames
-survive. Select does that, against a calibrated false-merge budget.
+Variance of Laplacian measures blur and texture at the same time. A blank wall
+scores low pin-sharp and a busy one scores high smeared, so the raw number
+cannot separate "this frame is ruined" from "this wall is plain". Everything
+here follows from that, and the whole design is about arranging comparisons
+where the texture appears on both sides and cancels.
 
-It used to. The gate was a windowed argmax keeping the sharpest panorama per
-four, which meant the count out was frames-in over four: a function of the
-window and the stitch rate, and of nothing in the picture. Measured on the 7th
-Floor walk, that discarded 421 of 562 panoramas, 93 of them sharper than the
-median frame it kept, and left 18 panoramas with no exported frame within tau
-of them. It also failed hardest exactly where the operator moved fastest,
-which is where content per second is highest, so the loss fell on the varied
-footage a generalisation set is for.
+There are exactly two such comparisons, and neither is a threshold on a walk.
 
-What is left is a veto. Flat bare-RCC concrete has low Laplacian variance even
-when perfectly sharp, so an absolute threshold would throw away good frames;
-the reference is the local maximum instead, over a window centred on the frame
-itself. A frame below `floor` of that is smeared, not merely flat, and no
-labeller can work with it. Everything else goes through. Scoring is restricted
-to the central latitude band: the poles are projection stretch and helmet.
+Inside a dedup group, because a group is one place by construction, so its
+members are looking at the same wall. `dedup.sharpest` picks the sharpest of
+them and the texture cancels for free, with nothing to configure. Measured on
+the 7th Floor walk, group members spread 1.97x in sharpness at the median and
+3.58x at p90, so this is where nearly all the blur is caught.
+
+Against the recent norm of a face's own heading, which is `heading_ratio`
+below. This is for the frames the first comparison cannot reach: a view seen
+once, absorbed by nothing, with no sharper twin to be replaced by. Select uses
+it on those and only those.
+
+What is deliberately not here is a gate. This stage used to keep the sharpest
+panorama per window of four, which made the count out frames-in over four: a
+function of the window and the stitch rate and nothing in the picture. On the
+7th Floor walk it discarded 421 of 562 panoramas, 93 of them sharper than the
+median frame it kept, and left 5.8% of the walk with no exported frame within
+tau of it. `legible` is what remains, and its job is small.
 """
 
 import cv2
@@ -45,42 +49,46 @@ def score_pano(bgr: np.ndarray, params: GateParams) -> float:
     return vol_score(gray)
 
 
-def local_max(scores: list[float], window: int) -> np.ndarray:
-    """The best score within `window` frames centred on each position.
+def legible(scores: list[float], dead: float) -> list[bool]:
+    """Panoramas worth stitching faces out of. One rule, and a blunt one.
 
-    Centred rather than trailing, because a smear is bracketed by the sharp
-    frames on both sides of it and a trailing window only sees the way in.
-    Clipped at the ends instead of padded: the first frames of a walk get a
-    shorter reference, which is honest, where padding would invent one.
+    Only the case nothing downstream can catch: a stretch of walk smeared
+    right through. Those frames group with each other, because blur is what
+    they have in common, and Select then exports a smear as the group's
+    sharpest member. Everything else is left alone here on purpose, because
+    this is the wrong place to judge a frame.
+
+    Why the wrong place: this score is variance of Laplacian over a whole
+    panorama, which mixes all four headings into one number, and variance of
+    Laplacian answers "how much texture" as much as "how sharp". A blank wall
+    scores low pin-sharp; a busy one scores high smeared. Judging a frame on it
+    means deleting the plain walls of a building made of plain walls.
     """
-    if window < 1:
-        raise ValueError("window must be >= 1")
-    s = np.asarray(scores, dtype=np.float64)
-    half = window // 2
-    return np.array([s[max(0, i - half): i + half + 1].max()
-                     for i in range(len(s))])
-
-
-def legible(scores: list[float], window: int, floor: float,
-            dead: float) -> list[bool]:
-    """Which frames are salvage, not which are good. Select judges good.
-
-    Two rules, because they answer different questions and used to share one
-    number. `floor` is against the neighbourhood, and catches a smear between
-    sharp frames. `dead` is against the walk, and catches the case the first
-    one cannot see: a stretch where every frame is smeared, so the local
-    maximum is a smear too and the whole run certifies itself.
-
-    Both are deliberately low. Select picks the sharpest member of each group,
-    so anything with a sharper twin is already handled and never reaches a
-    labeller; what is left for these rules is frames nothing can improve on.
-    """
-    if not 0.0 <= floor < 1.0:
-        raise ValueError("floor is a fraction of the local max, in [0, 1)")
     if not 0.0 <= dead < 1.0:
         raise ValueError("dead is a fraction of the walk median, in [0, 1)")
     if not scores:
         return []
-    ref = local_max(scores, window)
-    absolute = float(np.median(scores)) * dead
-    return [bool(s >= r * floor and s >= absolute) for s, r in zip(scores, ref)]
+    floor = float(np.median(scores)) * dead
+    return [bool(s >= floor) for s in scores]
+
+
+def heading_ratio(sharpness: np.ndarray, yaw: np.ndarray, t_sec: np.ndarray,
+                  span: float) -> np.ndarray:
+    """Each face's sharpness over the recent norm for its own heading.
+
+    The measure the raw score should have been. Texture is a property of what
+    a heading is pointed at, so comparing a face only against other faces of
+    the same heading nearby in time puts the same wall on both sides of the
+    division, where it cancels. What is left is blur.
+
+    A ratio near 1 means as sharp as this heading usually is. Well under 1
+    means this particular frame is smeared, whatever the wall looks like.
+    """
+    out = np.ones(len(sharpness), dtype=np.float64)
+    for heading in np.unique(yaw):
+        rows = np.flatnonzero(yaw == heading)
+        for i in rows:
+            near = rows[np.abs(t_sec[rows] - t_sec[i]) <= span]
+            ref = float(np.median(sharpness[near]))
+            out[i] = sharpness[i] / ref if ref > 0 else 1.0
+    return out

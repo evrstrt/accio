@@ -78,12 +78,45 @@ def greedy_dedup(embeddings: np.ndarray, params: DedupParams,
     return DedupResult(kept=kept, anchor_of=anchor_of)
 
 
+def drop_solo(result: DedupResult, ratio: np.ndarray, picks: dict[int, int],
+              floor: float) -> DedupResult:
+    """Forget groups of one whose only frame is a smear.
+
+    Everywhere else blur is already handled: a group is several looks at one
+    place, and `sharpest` exports the best of them, with the wall's texture
+    held constant because it is the same wall. A group of one has no such
+    choice. It is the single path by which an unusable frame reaches a
+    labeller, and so the only place a sharpness threshold earns its keep.
+
+    Judged on `ratio`, sharpness over the recent norm for that face's own
+    heading, so a plain wall is not punished for being plain.
+
+    Dropping one is a real loss of coverage: nothing else in the walk looks
+    like it, which is what made it a group of one. That is the trade being
+    made, a view seen once and too smeared to label against an annotator's
+    time and a wrong mask, and it is made here in the open rather than
+    upstream by accident.
+    """
+    if floor <= 0:
+        return result
+    gone = {k for k, members in result.group_of.items()
+            if not members and ratio[picks.get(k, k)] < floor}
+    if not gone:
+        return result
+    return DedupResult(kept=[k for k in result.kept if k not in gone],
+                       anchor_of=dict(result.anchor_of))
+
+
 def sharpest(result: DedupResult, sharpness: np.ndarray) -> dict[int, int]:
     """anchor -> the member of its group to export.
 
-    The sharpest, by the score the gate already computes per face. Ties go to
-    the anchor, so a group whose members are equally sharp keeps the frame the
+    The sharpest, by the per-face score render_faces recorded. Ties go to the
+    anchor, so a group whose members are equally sharp keeps the frame the
     reviewer is looking at rather than shuffling for no reason.
+
+    No normalisation, and none needed: a group is one place, so every member
+    is looking at the same wall and the texture that makes the raw score
+    ambiguous is constant across the comparison.
     """
     picks = {}
     for anchor, members in result.group_of.items():

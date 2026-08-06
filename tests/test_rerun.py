@@ -14,7 +14,8 @@ import pytest
 
 from accio.core import extract
 from accio.core.extract import PanoFrame, pano_name
-from accio.core.params import FaceParams, GateParams, PipelineParams
+from accio.core.params import (DedupParams, FaceParams, GateParams,
+                               PipelineParams)
 from accio.jobs import pipeline
 from accio.jobs.pipeline import rerun, run_walk
 
@@ -22,7 +23,8 @@ N_PANOS = 4
 BLURRED = 2                                     # the one smeared panorama
 PARAMS = PipelineParams(
     faces=FaceParams(size=32, yaws=(45, 225)),
-    gate=GateParams(floor=0.0, dead=0.0),       # veto nothing: both rules off
+    gate=GateParams(dead=0.0),                  # veto nothing
+    dedup=DedupParams(solo_floor=0.0),          # and keep every group of one
 )
 CALIB = {"tau": 0.94, "falseMergePct": 1.0, "farSeconds": 20.0, "samples": 10,
          "pairs": [], "healthy": True, "referenceError": "",
@@ -111,34 +113,21 @@ def test_rerun_from_faces_leaves_no_frames_from_the_old_settings(walk):
 
 
 def test_rerun_from_gate_rescores_and_changes_what_survives(walk):
-    """A stricter floor vetoes the smeared panorama and only that one.
+    """A stricter dead threshold vetoes the smeared panorama and only that one.
 
     What it must not do is thin the walk by a ratio. Three of four survive
     because three of four are legible, not because a window said so.
     """
     video, out = walk
-    strict = replace(PARAMS, gate=GateParams(window=3, floor=0.40))
+    strict = replace(PARAMS, gate=GateParams(dead=0.40))
     rerun(video, out, strict, StubEmbedder(), "gate")
 
     rows = pipeline.manifest_rows(out)
     survivors = {int(r["pano_idx"]) for r in rows}
     assert survivors == {0, 1, 3}               # BLURRED is gone, the rest stay
     assert len(rows) == 3 * 2                   # two yaws each
-    # the faces of the panorama the floor now rejects are gone
+    # the faces of the panorama the gate now rejects are gone
     assert names(out / "faces") == sorted(r["path"] for r in rows)
-
-
-def test_the_gate_does_not_thin_by_a_ratio(walk):
-    """The property the windowed argmax could not have: widening the window
-    changes what the reference is, never how many frames come out."""
-    video, out = walk
-    counts = set()
-    for window in (3, 5, 9):
-        rerun(video, out, replace(PARAMS, gate=GateParams(window=window,
-                                                          floor=0.40)),
-              StubEmbedder(), "gate")
-        counts.add(len({r["pano_idx"] for r in pipeline.manifest_rows(out)}))
-    assert counts == {N_PANOS - 1}
 
 
 def test_rerun_from_select_keeps_the_faces_it_already_has(walk):
