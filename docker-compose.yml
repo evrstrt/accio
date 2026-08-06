@@ -1,0 +1,26 @@
+# ACCIO_DATA_DIR is read from your shell or .env at compose time, not inside
+# the container. Set it to where the walks live on the server.
+
+services:
+  accio:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # the same value as the mount below, which is the whole trick: it makes
+      # every path this process computes true for the host's daemon too, so
+      # settings.host_path() stays the identity and cannot be got wrong
+      ACCIO_DATA: ${ACCIO_DATA_DIR:-/srv/accio/data}
+    volumes:
+      # same path inside and out. The stitcher is a sibling container and its
+      # bind mounts are resolved by the host, which cannot see in here.
+      - ${ACCIO_DATA_DIR:-/srv/accio/data}:${ACCIO_DATA_DIR:-/srv/accio/data}
+      # accio starts MediaSDK through the host's daemon rather than running
+      # one of its own
+      - /var/run/docker.sock:/var/run/docker.sock
+      # ~1.2 GB of weights, fetched once instead of on every restart
+      - models:/models
+
+volumes:
+  models:

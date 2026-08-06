@@ -759,3 +759,13 @@ def thumbnail(src: Path, cache: Path, width: int) -> Path:
     atomic.atomically(out, lambda tmp: cv2.imwrite(
         str(tmp), small, [cv2.IMWRITE_JPEG_QUALITY, 82]))
     return out
+
+
+# The built frontend, when there is one. Mounted last because "/" matches
+# everything, so any route declared after it would be shadowed by a 404 from
+# StaticFiles. In dev there is no dist/ and Vite serves the app itself, which
+# is why this is a condition rather than a requirement.
+if settings.WEB_DIST.is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=settings.WEB_DIST, html=True),
+              name="web")

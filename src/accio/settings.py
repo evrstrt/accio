@@ -31,6 +31,16 @@ HOST_DATA_ROOT = Path(os.environ.get("ACCIO_HOST_DATA", str(DATA_ROOT)))
 
 PROBE_MOUNT = "/probe"
 
+# The built frontend. The image bakes it in beside the package; a dev machine
+# has no dist/ and runs Vite instead, so the server treats it as optional.
+WEB_DIST = Path(os.environ.get("ACCIO_WEB_DIST",
+                               Path(__file__).resolve().parents[2] / "web" / "dist"))
+
+# Weights land here on first use. In a container this has to be a volume or
+# every restart re-downloads ~1.2 GB from HuggingFace before the first stitch
+# has a chance to finish.
+MODEL_CACHE = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+
 
 def host_path(path: Path) -> Path:
     """The name a sibling container's bind mount has to use for `path`.
@@ -60,8 +70,11 @@ def mount_check(image: str, timeout: float = 30.0) -> str:
     except (OSError, subprocess.SubprocessError) as e:
         return f"could not probe the data mount: {e}"
     if out.returncode:
+        # the head, not the tail: this is the docker client refusing, and it
+        # says why on the first line. (The stitcher keeps the tail instead,
+        # because there the useful part is MediaSDK's last words.)
         return (f"the data root is not mountable as {HOST_DATA_ROOT}: "
-                f"{out.stderr.strip()[-200:]}")
+                f"{out.stderr.strip()[:300]}")
     seen = set(out.stdout.split())
     ours = {p.name for p in DATA_ROOT.iterdir()} if DATA_ROOT.exists() else set()
     if seen & ours:
