@@ -94,12 +94,19 @@ def stamp_exif(jpg: bytes, payload: dict) -> bytes:
     return out.getvalue()
 
 
-def build_zip(walk_id: str, walk_dir: Path, rows: list[dict],
+def write_zip(dest, walk_id: str, walk_dir: Path, rows: list[dict],
               state: dict[str, dict], meta: dict, embed_model: str,
               params: PipelineParams, decisions: list[dict] | None = None,
-              segmentation: dict | None = None) -> bytes:
+              segmentation: dict | None = None) -> int:
     """The zip is the deliverable, so everything the dataset needs is in it:
-    the frames, what produced them, and what a human changed by hand."""
+    the frames, what produced them, and what a human changed by hand.
+
+    Writes to `dest` (a path or an open binary file) and returns the frame
+    count. Writing rather than returning bytes keeps the peak at one frame
+    instead of the whole archive: measured 37 MB for a 4.7-minute walk, which
+    is ~235 MB for a half-hour one, per export, times however many reviewers
+    press the button at once.
+    """
     prefix = name_prefix(walk_id, meta)
     pipeline = dict(asdict(params), embed_model_used=embed_model)
     common = {"walk": walk_id, **meta, "pipeline": pipeline}
@@ -107,9 +114,8 @@ def build_zip(walk_id: str, walk_dir: Path, rows: list[dict],
     # under the same name, and the class mix goes in the manifest row
     classes = (segmentation or {}).get("classes", {})
 
-    buf = io.BytesIO()
     manifest = []
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_STORED) as z:
 
         def write(name: str, data: bytes | str):
             z.writestr(zipfile.ZipInfo(name, date_time=ZIP_EPOCH), data)
@@ -161,4 +167,12 @@ def build_zip(walk_id: str, walk_dir: Path, rows: list[dict],
                                        "dropped": dropped,
                                        "overridden": overridden,
                                        "segmented": bool(classes)}, indent=1))
+    return len(manifest)
+
+
+def build_zip(*args, **kw) -> bytes:
+    """The whole archive in memory. For tests and for anything small enough
+    to know it is small; the route writes to disk instead."""
+    buf = io.BytesIO()
+    write_zip(buf, *args, **kw)
     return buf.getvalue()

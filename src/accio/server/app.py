@@ -13,6 +13,7 @@ accio.db the decisions and walk metadata.
 
 import csv
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -24,6 +25,7 @@ import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from .. import settings
 from ..core import atomic, export, extract
@@ -37,6 +39,10 @@ from ..store import db
 DATA_ROOT = settings.DATA_ROOT
 VIDEO_DIR = DATA_ROOT / "videos"
 WALKS_ROOT = DATA_ROOT / "walks"
+# Exports are assembled here rather than in /tmp: under the data root they sit
+# on the volume that already holds the frames, so a hundreds-of-megabytes
+# archive cannot fill a container's writable layer instead.
+EXPORT_TMP = DATA_ROOT / ".exports"
 
 app = FastAPI(title="accio")
 
@@ -72,6 +78,9 @@ def reap_incoming() -> None:
     staging = VIDEO_DIR / ".incoming"
     if staging.exists():
         shutil.rmtree(staging, ignore_errors=True)
+    # half-built exports are the same story: the background task that deletes
+    # one runs after the response, which a killed process never sends
+    shutil.rmtree(EXPORT_TMP, ignore_errors=True)
 
 
 def walk_dir(walk_id: str) -> Path:
@@ -666,14 +675,29 @@ def export_walk(walk_id: str) -> Response:
     meta = db.walk_meta(conn(), walk_id) or {}
     npz = wdir / "embeddings.npz"
     model = str(np.load(npz)["model"]) if npz.exists() else ""
+    # Assembled on disk rather than in memory. The archive is the whole export
+    # and it scales with the walk, so holding it cost the server ~235 MB for a
+    # half-hour walk per reviewer pressing the button. A temp file also means
+    # a missing frame fails as a clean 500 before any bytes are sent, where a
+    # streamed response would already have committed to 200 and delivered a
+    # truncated zip, which is the worst possible outcome for a dataset.
+    #
     # the settings this walk was built with, not today's defaults: the EXIF is
     # the provenance record, and a wrong one is worse than none
-    data = export.build_zip(walk_id, wdir, rows, state, meta, model,
-                            walk_params(walk_id),
-                            db.override_log(conn(), walk_id),
-                            pipeline.read_segmentation(wdir))
-    return Response(data, media_type="application/zip", headers={
-        "Content-Disposition": f'attachment; filename="{walk_id}.zip"'})
+    EXPORT_TMP.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(suffix=".zip", dir=EXPORT_TMP)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            export.write_zip(f, walk_id, wdir, rows, state, meta, model,
+                             walk_params(walk_id),
+                             db.override_log(conn(), walk_id),
+                             pipeline.read_segmentation(wdir))
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return FileResponse(
+        tmp, media_type="application/zip", filename=f"{walk_id}.zip",
+        background=BackgroundTask(Path(tmp).unlink, missing_ok=True))
 
 
 @app.get("/api/walks/{walk_id}/segmentation")
