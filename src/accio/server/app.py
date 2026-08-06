@@ -13,7 +13,6 @@ accio.db the decisions and walk metadata.
 
 import csv
 import json
-import os
 import shutil
 import tempfile
 import threading
@@ -26,6 +25,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from .. import settings
 from ..core import atomic, export, extract
 from ..core.params import (BACKBONES, SEGMENTERS, SITE_CLASSES,
                            PipelineParams)
@@ -34,7 +34,7 @@ from ..jobs import pipeline
 from ..jobs.runner import Runner
 from ..store import db
 
-DATA_ROOT = Path(os.environ.get("ACCIO_DATA", "data")).resolve()
+DATA_ROOT = settings.DATA_ROOT
 VIDEO_DIR = DATA_ROOT / "videos"
 WALKS_ROOT = DATA_ROOT / "walks"
 

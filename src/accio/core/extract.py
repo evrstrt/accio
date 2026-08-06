@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .. import settings
 from . import atomic
 from .params import ExtractParams
 
@@ -186,9 +187,12 @@ def sdk_cmd(video: Path, pano_dir: Path, frame_nos: list[int], cname: str,
     # The example binary's -inputs parser reads args until the next dash, so
     # -inputs must not be last.
     inputs = [f"/in/{p.name}" for p in lens_files(video)]
+    # host_path, not the paths we hold: this command is executed by the host's
+    # daemon, which cannot see inside our container. See accio.settings.
     return ["docker", "run", "--rm", "--platform=linux/amd64",
             "--name", cname,
-            "-v", f"{video.parent}:/in:ro", "-v", f"{pano_dir}:/outdir",
+            "-v", f"{settings.host_path(video.parent)}:/in:ro",
+            "-v", f"{settings.host_path(pano_dir)}:/outdir",
             "--entrypoint", "MediaSDKTest", params.sdk_image,
             "-model_root_dir", "/opt/models",
             "-inputs", *inputs,
@@ -309,9 +313,15 @@ def stitch(video: Path, pano_dir: Path, params: ExtractParams) -> list[PanoFrame
             if not why:
                 break
             if attempt == 2:
+                # Nothing at all came out, which reads the same whether the
+                # video was unreadable or the container mounted an empty
+                # directory where the video should have been. Ask.
+                mount = (settings.mount_check(params.sdk_image)
+                         if not digit_jpgs() else "")
                 raise RuntimeError(
                     f"{why}\nExported {len(digit_jpgs())}/{len(frame_nos)} "
-                    f"frames for {video.name}.")
+                    f"frames for {video.name}."
+                    + (f"\n{mount}" if mount else ""))
 
     exported = digit_jpgs()
     frames = []
