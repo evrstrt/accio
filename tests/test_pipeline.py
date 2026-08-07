@@ -73,10 +73,15 @@ def test_run_walk_manifest_and_embeddings_align(tmp_path, monkeypatch):
     assert np.allclose(saved["embeddings"], expected)
     assert str(saved["model"]) == PARAMS.embed.model_name
 
-    # the duplicate embedding was absorbed by its anchor, everything else kept
-    assert [r["kept"] for r in rows] == ["1"] * 5 + ["0"]
-    assert rows[-1]["anchor"] == "0"
-    assert float(rows[-1]["cosine"]) == 1.0
+    # the duplicate embedding was absorbed, everything else kept. Which of the
+    # identical pair anchors is decided by sharpness, not by arrival, so the
+    # test asks that one absorbed the other rather than naming which.
+    absorbed = [i for i, r in enumerate(rows) if r["kept"] == "0"]
+    assert len(absorbed) == 1 and absorbed[0] in (0, 5)
+    twin = 5 if absorbed[0] == 0 else 0
+    assert rows[absorbed[0]]["anchor"] == str(twin)
+    assert float(rows[absorbed[0]]["cosine"]) == 1.0
+    assert float(rows[twin]["sharpness"]) >= float(rows[absorbed[0]]["sharpness"])
 
     # manifest rows follow capture order: pano major, yaw minor
     assert [(r["pano_idx"], r["yaw"]) for r in rows] == [

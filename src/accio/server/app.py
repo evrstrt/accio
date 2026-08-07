@@ -289,14 +289,14 @@ def walk_detail(walk_id: str) -> dict:
             continue
         s = state.get(rows[f["idx"]]["path"], {"pick": None, "dropped": False})
         pick = idx_of.get(s["pick"]) if s["pick"] else None
-        # the machine's choice is the sharpest member; the human's overrides it
-        auto = idx_of.get(rows[f["idx"]]["pick"], f["idx"])
+        # the machine's choice is the anchor, which dedup visited sharpest
+        # first; the human's overrides it
         groups.append({
             "anchor": f,
             "members": sorted((m for m in faces if m["anchor"] == f["idx"]),
                               key=lambda m: -m["cosine"]),
-            "auto": auto,
-            "pick": pick if pick is not None else auto,
+            "auto": f["idx"],
+            "pick": pick if pick is not None else f["idx"],
             "dropped": s["dropped"],
         })
     return {"id": walk_id, "faces": len(faces), "groups": groups,

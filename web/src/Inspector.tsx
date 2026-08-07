@@ -489,9 +489,10 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
                 frames on this walk at {s.reference}.</>}
         </div>
         <div className="insp-note">
-          A group exports its sharpest member, so blur is handled wherever there is a
-          group. A group of one has no such choice, and is the only way an unusable
-          frame reaches a labeller. Solo floor drops those scoring under{' '}
+          Dedup runs sharpest first, so a group anchors on its best frame and blur is
+          handled wherever there is a group. A group of one has no such choice, and is
+          the only way an unusable frame reaches a labeller. Solo floor drops those
+          scoring under{' '}
           {(dedup.solo_floor ?? 0).toFixed(2)} of what their own heading normally scores,
           which is the comparison that cancels a wall's texture. Set it to 0 to keep
           every one; each drop costs a view nothing else in the walk resembles.

@@ -9,15 +9,16 @@ where the texture appears on both sides and cancels.
 There are exactly two such comparisons, and neither is a threshold on a walk.
 
 Inside a dedup group, because a group is one place by construction, so its
-members are looking at the same wall. `dedup.sharpest` picks the sharpest of
-them and the texture cancels for free, with nothing to configure. Measured on
-the 7th Floor walk, group members spread 1.97x in sharpness at the median and
-3.58x at p90, so this is where nearly all the blur is caught.
+members are looking at the same wall. Dedup visits sharpest first, so a group
+anchors on its best member and the texture cancels for free, with nothing to
+configure. Measured on the 7th Floor walk, group members spread 1.97x in
+sharpness at the median and 3.58x at p90, so this is where nearly all the blur
+is caught.
 
 Against the recent norm of a face's own heading, which is `heading_ratio`
 below. This is for the frames the first comparison cannot reach: a view seen
-once, absorbed by nothing, with no sharper twin to be replaced by. Select uses
-it on those and only those.
+once, absorbed by nothing, which is its own anchor because there is nothing
+sharper to be. Select uses it on those and only those.
 
 What is deliberately not here is a gate. This stage used to keep the sharpest
 panorama per window of four, which made the count out frames-in over four: a

@@ -26,12 +26,12 @@ def make_walk(tmp_path):
     with open(tmp_path / "manifest.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["pano_idx", "t_sec", "yaw", "path", "kept", "anchor",
-                    "cosine", "sharpness", "pick"])
+                    "cosine", "sharpness"])
         for i, name in enumerate(NAMES):
-            # rising sharpness, so a group's sharpest is never the one that
-            # arrived first and the pick column has to do real work
+            # rising sharpness, so the frame that anchors a group is never the
+            # one that arrived first and the visit order has to do real work
             w.writerow([i, f"{i * 0.5:.1f}", name[1:4], name, 1, "", "",
-                        f"{10 + 10 * i:.2f}", name])
+                        f"{10 + 10 * i:.2f}"])
     return tmp_path
 
 
@@ -49,10 +49,11 @@ def test_threshold_changes_grouping_not_rows(tmp_path):
     # every face is still there, in order, under the same name
     assert [r["path"] for r in rows] == NAMES
     assert counts["faces"] == 4
-    # cos(0.30) = 0.955 > 0.90, so the first three collapse into one group
+    # cos(0.30) = 0.955 > 0.90, so the first three collapse into one group,
+    # anchored on face 2: the sharpest of them, not the one that arrived first
     assert counts["anchors"] == 2 and counts["absorbed"] == 2
-    assert [r["kept"] for r in rows] == ["1", "0", "0", "1"]
-    assert rows[1]["anchor"] == "0" and float(rows[1]["cosine"]) > 0.9
+    assert [r["kept"] for r in rows] == ["0", "0", "1", "1"]
+    assert rows[1]["anchor"] == "2" and float(rows[1]["cosine"]) > 0.9
 
 
 def test_tighter_threshold_keeps_more(tmp_path):

@@ -13,7 +13,7 @@ export type Face = {
 export type Group = {
   anchor: Face
   members: Face[]
-  auto: number // idx the pipeline chose: the sharpest member of the group
+  auto: number // idx the pipeline chose: the anchor, visited sharpest first
   pick: number // idx of the effective pick (auto unless a human overrode it)
   dropped: boolean
 }

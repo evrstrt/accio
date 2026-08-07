@@ -61,7 +61,7 @@ def test_the_manifest_is_written_atomically(tmp_path):
     target = tmp_path / "manifest.csv"
     target.write_text("previous\n")
     emb = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
-    result = greedy_dedup(emb, DedupParams(tau=0.94))
+    result = greedy_dedup(emb, DedupParams(tau=0.94), np.array([10.0, 20.0]))
     faces = [(0, 0.0, 45, "y045_00000.jpg"), (1, 0.5, 45, "y045_00001.jpg")]
 
     write_manifest(target, faces, result, [10.0, 20.0])

@@ -126,10 +126,9 @@ function GroupRow({ group, tau, onDecision }: {
   return (
     <div className={`group-row${dropped ? ' dropped' : ''}`}>
       <div className="group-head">
-        {/* The tile shows the frame this group exports, which since the
-            sharpest member started winning is usually not the anchor. Naming
-            only the anchor here made the header disagree with the tile that
-            opened it, which reads as a bug rather than as two facts. */}
+        {/* The tile shows the frame this group exports, which is the anchor
+            unless a human moved it. Naming a different frame here than the
+            tile that opened it reads as a bug rather than as two facts. */}
         <span>
           y{anchor.yaw}, from t={anchor.tSec.toFixed(1)}s
           {members.length > 0 ? <>

@@ -43,10 +43,10 @@ def effective_picks(rows: list[dict],
     """(anchor_idx, pick_idx, manifest_row) per surviving group, in walk order.
 
     A group survives unless dropped in review; its exported frame is the
-    reviewer's pick, defaulting to the sharpest member the manifest recorded.
-    Review state is keyed by face name, so it still resolves after a re-run
-    renumbers the manifest. The anchor comes back too, so the export can say
-    which frames a human moved.
+    reviewer's pick, defaulting to the anchor, which dedup already chose as the
+    sharpest member. Review state is keyed by face name, so it still resolves
+    after a re-run renumbers the manifest. The anchor comes back too, so the
+    export can say which frames a human moved.
     """
     idx_of = {r["path"]: i for i, r in enumerate(rows)}
     picks = []
@@ -56,8 +56,7 @@ def effective_picks(rows: list[dict],
         s = state.get(r["path"], {"pick": None, "dropped": False})
         if s["dropped"]:
             continue
-        auto = idx_of.get(r["pick"], i)
-        pick = idx_of.get(s["pick"], auto) if s["pick"] else auto
+        pick = idx_of.get(s["pick"], i) if s["pick"] else i
         picks.append((i, pick, rows[pick]))
     return picks
 
@@ -69,17 +68,14 @@ def review_counts(rows: list[dict], state: dict[str, dict]) -> tuple[int, int]:
     longer anchors are kept in the log but do not count against this run, or
     the funnel would report drops the export cannot show.
     """
-    # the auto-pick is the sharpest member, not the anchor, so an override is
-    # a human disagreeing with that rather than with the group's name
-    auto = {r["path"]: (r["pick"] or r["path"])
-            for r in rows if r["kept"] == "1"}
+    anchors = {r["path"] for r in rows if r["kept"] == "1"}
     dropped = overridden = 0
     for anchor, s in state.items():
-        if anchor not in auto:
+        if anchor not in anchors:
             continue
         if s["dropped"]:
             dropped += 1
-        elif s["pick"] and s["pick"] != auto[anchor]:
+        elif s["pick"] and s["pick"] != anchor:
             overridden += 1
     return dropped, overridden
 

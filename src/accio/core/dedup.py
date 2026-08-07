@@ -1,17 +1,27 @@
 """Stage 5: greedy cosine dedup, per walk.
 
-Walk the faces in capture order. A face whose max cosine to every already-kept
+Walk the faces sharpest first. A face whose max cosine to every already-kept
 face is under tau is kept; otherwise it is absorbed by the kept face it
 matched, and that anchor + cosine are recorded. The anchor mapping is what
 the review UI shows as duplicate groups, and what the annotator's swap
 overrides operate on.
 
-Grouping and representing are separate questions. The anchor is whichever
-member arrived first, which makes it a stable name for the group and a bad
-choice of frame: an operator entering a bay mid-turn produces a smeared frame,
-settles, and takes several clean ones, all of which absorb into the smear. So
-the anchor stays the group's identity and `sharpest` picks what actually gets
-exported.
+Sharpest first, not capture order, and the ordering is the whole design. An
+operator entering a bay mid-turn produces a smeared frame, settles, and takes
+several clean ones; in capture order the smear arrives first and becomes the
+anchor, so the group had to be re-represented afterwards by its sharpest
+member. That swap is what broke the guarantee. The frames the pass compared
+were the anchors, the frames it shipped were the replacements, and nothing
+compared the replacements to each other: measured on the 7th Floor walk, 175
+of 224 shipped frames sat above tau against another shipped frame, worst pair
+0.9837 against a tau of 0.9304.
+
+Descending sharpness makes the anchor the sharpest member by construction, so
+the set that is compared is the set that ships. Re-deduping the shipped set
+until it stopped shrinking would also have removed the duplicates, and was
+wrong: merging A into B and then B into C puts A and C in one group at a
+cosine no threshold authorised, which took the false-merge rate on the 0717
+walk from 2.40% to 6.30% through a budget of 5%.
 
 Dedup runs per walk only: cross-walk near-duplicates are different walls that
 look alike, and merging them would cost coverage.
@@ -42,8 +52,14 @@ class DedupResult:
 
 
 def greedy_dedup(embeddings: np.ndarray, params: DedupParams,
+                 sharpness: np.ndarray,
                  pano_of: np.ndarray | None = None) -> DedupResult:
     """embeddings: (N, D) L2-normalised, in capture order.
+
+    sharpness is the per-face score, and it is the visit order rather than a
+    tie-break: see the module docstring for why that is what makes the kept
+    set mutually distinct. Ties keep the earlier face, so a stretch of equally
+    sharp frames anchors on the one a reviewer already has on screen.
 
     pano_of names the panorama each face was cut from. Faces of one panorama
     can never absorb each other: they are one position looking four ways, and
@@ -56,6 +72,9 @@ def greedy_dedup(embeddings: np.ndarray, params: DedupParams,
     """
     if embeddings.ndim != 2:
         raise ValueError(f"expected (N, D) embeddings, got shape {embeddings.shape}")
+    if len(sharpness) != len(embeddings):
+        raise ValueError(f"got {len(sharpness)} sharpness scores for "
+                         f"{len(embeddings)} embeddings")
     if pano_of is not None and len(pano_of) != len(embeddings):
         raise ValueError(f"got {len(pano_of)} panorama ids for "
                          f"{len(embeddings)} embeddings")
@@ -63,7 +82,8 @@ def greedy_dedup(embeddings: np.ndarray, params: DedupParams,
     kept: list[int] = []                   # so the loop matvecs a view, no copies
     kept_pano = np.empty(len(embeddings), dtype=np.int64)
     anchor_of: dict[int, tuple[int, float]] = {}
-    for i in range(len(embeddings)):
+    for i in np.argsort(-np.asarray(sharpness, dtype=float), kind="stable"):
+        i = int(i)
         station = int(pano_of[i]) if pano_of is not None else i
         if kept:
             sims = kept_rows[:len(kept)] @ embeddings[i]
@@ -75,18 +95,18 @@ def greedy_dedup(embeddings: np.ndarray, params: DedupParams,
         kept_rows[len(kept)] = embeddings[i]
         kept_pano[len(kept)] = station
         kept.append(i)
-    return DedupResult(kept=kept, anchor_of=anchor_of)
+    return DedupResult(kept=sorted(kept), anchor_of=anchor_of)
 
 
-def drop_solo(result: DedupResult, ratio: np.ndarray, picks: dict[int, int],
+def drop_solo(result: DedupResult, ratio: np.ndarray,
               floor: float) -> DedupResult:
     """Forget groups of one whose only frame is a smear.
 
     Everywhere else blur is already handled: a group is several looks at one
-    place, and `sharpest` exports the best of them, with the wall's texture
-    held constant because it is the same wall. A group of one has no such
-    choice. It is the single path by which an unusable frame reaches a
-    labeller, and so the only place a sharpness threshold earns its keep.
+    place and its anchor is the sharpest of them, with the wall's texture held
+    constant because it is the same wall. A group of one has no such choice.
+    It is the single path by which an unusable frame reaches a labeller, and so
+    the only place a sharpness threshold earns its keep.
 
     Judged on `ratio`, sharpness over the recent norm for that face's own
     heading, so a plain wall is not punished for being plain.
@@ -100,29 +120,8 @@ def drop_solo(result: DedupResult, ratio: np.ndarray, picks: dict[int, int],
     if floor <= 0:
         return result
     gone = {k for k, members in result.group_of.items()
-            if not members and ratio[picks.get(k, k)] < floor}
+            if not members and ratio[k] < floor}
     if not gone:
         return result
     return DedupResult(kept=[k for k in result.kept if k not in gone],
                        anchor_of=dict(result.anchor_of))
-
-
-def sharpest(result: DedupResult, sharpness: np.ndarray) -> dict[int, int]:
-    """anchor -> the member of its group to export.
-
-    The sharpest, by the per-face score render_faces recorded. Ties go to the
-    anchor, so a group whose members are equally sharp keeps the frame the
-    reviewer is looking at rather than shuffling for no reason.
-
-    No normalisation, and none needed: a group is one place, so every member
-    is looking at the same wall and the texture that makes the raw score
-    ambiguous is constant across the comparison.
-    """
-    picks = {}
-    for anchor, members in result.group_of.items():
-        best = anchor
-        for i, _cos in members:
-            if sharpness[i] > sharpness[best]:
-                best = i
-        picks[anchor] = best
-    return picks

@@ -27,13 +27,13 @@ import numpy as np
 from ..core import (atomic, blur, calibrate as calibrate_mod, extract, faces,
                     segment as segment_mod)
 from ..core.calibrate import calibrate
-from ..core.dedup import drop_solo, greedy_dedup, sharpest
+from ..core.dedup import drop_solo, greedy_dedup
 from ..core.embed import Embedder
 from ..core.params import PipelineParams
 
 EMBED_CHUNK = 64  # faces held in memory at once on the way to the embedder
 MANIFEST_COLUMNS = ["pano_idx", "t_sec", "yaw", "path", "kept", "anchor",
-                    "cosine", "sharpness", "pick"]
+                    "cosine", "sharpness"]
 STAGES = ("stitch", "gate", "faces", "embed", "calibrate", "select", "segment")
 
 # a face on its way through the pipeline: (pano index, t, yaw, file)
@@ -163,10 +163,8 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
 
     say("select", "running")
     params = apply_rule(params, calib)
-    result = greedy_dedup(embeddings, params.dedup,
-                          np.array([p for p, _, _, _ in named]))
-    result, picks, solo = select(embeddings, named, sharpness, params)
-    write_manifest(out / "manifest.csv", named, result, sharpness, picks)
+    result, solo = select(embeddings, named, sharpness, params)
+    write_manifest(out / "manifest.csv", named, result, sharpness)
     save_params(out, params)
     kept = len(result.kept)
     say("select", "done", anchors=kept, absorbed=len(records) - kept, solo=solo)
@@ -174,15 +172,9 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     # what is in the frames that survived. Annotation only: it runs after the
     # set is decided and never changes it, so a wrong mask costs a correction
     # rather than a candidate.
-    #
-    # On the picks, not the anchors: those are the frames the export ships, and
-    # they differ from their anchor in about half of all groups now that the
-    # sharpest member wins. Segmenting anchors would leave most exported frames
-    # with no mask and a blank class row, and build_zip's `if mask.exists()`
-    # would swallow it.
     if params.segment.enabled:
         say("segment", "running")
-        named_kept = [named[picks[i]][3] for i in result.kept]
+        named_kept = [named[i][3] for i in result.kept]
         classes = run_segment(out, named_kept, params, segmenter)
         say("segment", "done", segmented=len(classes))
     elif start <= STAGES.index("segment"):
@@ -461,22 +453,18 @@ def apply_rule(params: PipelineParams, calib: dict | None) -> PipelineParams:
 
 
 def write_manifest(path: Path, faces_out: list[tuple[int, float, int, str]],
-                   result, sharpness: list[float],
-                   picks: dict[int, int] | None = None) -> None:
+                   result, sharpness: list[float]) -> None:
     """One row per face in capture order, with the group it landed in.
 
     faces_out is (pano_idx, t_sec, yaw, file name); the dedup result supplies
     kept / anchor / cosine. Shared by the full run and by a re-select, so the
     two can never disagree about the manifest's shape.
 
-    `pick` is only on anchor rows: the member this group exports, which is the
-    sharpest of it rather than whichever arrived first. A reviewer can still
-    override it, and that override is stored separately, so this column stays
-    the machine's answer and never records a human's.
+    There is no separate column for the frame a group exports. Dedup visits
+    sharpest first, so the anchor is that frame. A reviewer's override is a
+    different question and is stored apart from this file.
     """
     kept = set(result.kept)
-    if picks is None:
-        picks = sharpest(result, np.asarray(sharpness, dtype=float))
 
     def rows(target: Path) -> None:
         with open(target, "w", newline="") as f:
@@ -487,9 +475,8 @@ def write_manifest(path: Path, faces_out: list[tuple[int, float, int, str]],
                 if i in result.anchor_of:
                     a, c = result.anchor_of[i]
                     anchor, cos = str(a), f"{c:.4f}"
-                pick = faces_out[picks[i]][3] if i in picks else ""
                 w.writerow([pano_idx, f"{t_sec:.1f}", yaw, name, int(i in kept),
-                            anchor, cos, f"{sharpness[i]:.2f}", pick])
+                            anchor, cos, f"{sharpness[i]:.2f}"])
 
     # this file is the walk: sharp_panos and face_rows both rebuild the stages
     # above from it, so a half-written one does not lose the selection, it
@@ -504,28 +491,26 @@ def save_params(out: Path, params: PipelineParams) -> None:
 
 def select(embeddings: np.ndarray, named: list, sharpness: list,
            params: PipelineParams) -> tuple:
-    """Which faces ship, and which frame represents each of them.
+    """Which faces ship.
 
     One function because there are two ways in, the full run and reselect's
     fast path, and a rule that lived in only one of them would mean the cheap
     re-run quietly disagreed with the expensive one.
 
-    Returns (result, anchor -> exported frame, how many groups of one were
-    dropped for being smeared).
+    Returns (result, how many groups of one were dropped for being smeared).
     """
     scores = np.asarray(sharpness, dtype=float)
-    result = greedy_dedup(embeddings, params.dedup,
+    result = greedy_dedup(embeddings, params.dedup, scores,
                           np.array([p for p, _, _, _ in named]))
-    picks = sharpest(result, scores)
-    # the one place a sharpness threshold belongs: a group of one has no
-    # sharper member to be swapped for, so nothing downstream can save it
+    # the one place a sharpness threshold belongs: a group of one is its own
+    # anchor, so there is no sharper member for it to be represented by
     ratio = blur.heading_ratio(scores,
                                np.array([y for _, _, y, _ in named]),
                                np.array([t for _, t, _, _ in named]),
                                params.dedup.solo_span)
     before = len(result.kept)
-    result = drop_solo(result, ratio, picks, params.dedup.solo_floor)
-    return result, sharpest(result, scores), before - len(result.kept)
+    result = drop_solo(result, ratio, params.dedup.solo_floor)
+    return result, before - len(result.kept)
 
 
 def reselect(walk_out: Path, params: PipelineParams) -> dict:
@@ -556,8 +541,8 @@ def reselect(walk_out: Path, params: PipelineParams) -> dict:
     named = [(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]), r["path"])
              for r in rows]
     sharpness = [float(r["sharpness"]) for r in rows]
-    result, picks, solo = select(embeddings, named, sharpness, params)
-    write_manifest(walk_out / "manifest.csv", named, result, sharpness, picks)
+    result, solo = select(embeddings, named, sharpness, params)
+    write_manifest(walk_out / "manifest.csv", named, result, sharpness)
     save_params(walk_out, params)
     clear_segmentation(walk_out)
     kept = len(result.kept)

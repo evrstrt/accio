@@ -42,12 +42,13 @@ class GateParams:
     One threshold, because a panorama score mixes all four headings and cannot
     tell a plain wall from a smeared one. It catches the single case nothing
     downstream can: a stretch smeared right through, whose frames group with
-    each other because blur is what they share, leaving Select to export a
-    smear as the sharpest of them.
+    each other because blur is what they share, leaving Select to anchor that
+    group on a smear because a smear is the best it has.
 
-    Measured on the 7th Floor walk, this vetoes nothing and the export is the
-    same 224 frames as with the stage switched off. That is the intended
-    result. Raising it does not sharpen the export, it deletes coverage.
+    Measured on both walks, this vetoes nothing: the lowest-scoring panorama on
+    7th Floor is at 0.204 of the walk median and on 0717 nothing was dropped at
+    all. That is the intended result. Raising it does not sharpen the export,
+    it deletes coverage.
     """
 
     dead: float = 0.15        # of the walk's median sharpness; under it a

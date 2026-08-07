@@ -18,21 +18,12 @@ from accio.core.params import PipelineParams
 
 ROWS = [  # two kept anchors; row 1 is absorbed into 0, and 0 is the sharper
     {"pano_idx": "0", "t_sec": "0.5", "yaw": "45", "path": "y045_00000.jpg",
-     "kept": "1", "anchor": "", "cosine": "", "sharpness": "90.0",
-     "pick": "y045_00000.jpg"},
+     "kept": "1", "anchor": "", "cosine": "", "sharpness": "90.0"},
     {"pano_idx": "1", "t_sec": "1.0", "yaw": "45", "path": "y045_00001.jpg",
-     "kept": "0", "anchor": "0", "cosine": "0.9700", "sharpness": "40.0",
-     "pick": ""},
+     "kept": "0", "anchor": "0", "cosine": "0.9700", "sharpness": "40.0"},
     {"pano_idx": "2", "t_sec": "1.5", "yaw": "135", "path": "y135_00002.jpg",
-     "kept": "1", "anchor": "", "cosine": "", "sharpness": "70.0",
-     "pick": "y135_00002.jpg"},
+     "kept": "1", "anchor": "", "cosine": "", "sharpness": "70.0"},
 ]
-
-# the same walk where the frame that arrived first was the smeared one, which
-# is the ordinary case: the operator enters a bay mid-turn, then settles
-BLURRY_ANCHOR = [dict(r) for r in ROWS]
-BLURRY_ANCHOR[0] |= {"sharpness": "12.0", "pick": "y045_00001.jpg"}
-BLURRY_ANCHOR[1] |= {"sharpness": "88.0"}
 
 
 def test_slug_and_names():
@@ -53,26 +44,23 @@ def test_effective_picks_defaults_swaps_and_drops():
     assert [p for _, p, _ in effective_picks(ROWS, DROP)] == [0]
 
 
-def test_the_default_pick_is_the_sharpest_member_not_the_anchor():
-    """The frame the group exports is the one worth labelling, and the anchor
-    is only the frame that happened to arrive first."""
-    assert [p for _, p, _ in effective_picks(BLURRY_ANCHOR, {})] == [1, 2]
-    # the group is still anchored where it was, so review decisions still land
-    assert [a for a, _, _ in effective_picks(BLURRY_ANCHOR, {})] == [0, 2]
+def test_the_default_pick_is_the_anchor():
+    """Dedup visits sharpest first, so the anchor already is the frame worth
+    labelling and there is no second choice for the export to make."""
+    assert [(a, p) for a, p, _ in effective_picks(ROWS, {})] == [(0, 0), (2, 2)]
 
 
-def test_a_human_still_overrides_the_sharpest():
-    assert [p for _, p, _ in effective_picks(BLURRY_ANCHOR, SWAP)] == [1, 2]
+def test_a_human_overrides_the_anchor():
+    assert [p for _, p, _ in effective_picks(ROWS, SWAP)] == [1, 2]
     back = {"y045_00000.jpg": {"pick": "y045_00000.jpg", "dropped": False}}
-    assert [p for _, p, _ in effective_picks(BLURRY_ANCHOR, back)] == [0, 2]
+    assert [p for _, p, _ in effective_picks(ROWS, back)] == [0, 2]
 
 
-def test_an_override_is_disagreeing_with_the_machine_not_with_the_anchor():
-    """The auto-pick moved, so agreeing with it is not an override and putting
-    it back to the anchor is."""
-    assert review_counts(BLURRY_ANCHOR, SWAP) == (0, 0)      # same as auto
-    back = {"y045_00000.jpg": {"pick": "y045_00000.jpg", "dropped": False}}
-    assert review_counts(BLURRY_ANCHOR, back) == (0, 1)
+def test_choosing_the_anchor_again_is_not_an_override():
+    """Only moving off it counts, or the funnel reports swaps nobody made."""
+    same = {"y045_00000.jpg": {"pick": "y045_00000.jpg", "dropped": False}}
+    assert review_counts(ROWS, same) == (0, 0)
+    assert review_counts(ROWS, SWAP) == (0, 1)
 
 
 def test_effective_picks_report_the_anchor_they_came_from():
