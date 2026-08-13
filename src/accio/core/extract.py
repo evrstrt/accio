@@ -73,7 +73,11 @@ def probe(video: Path) -> tuple[float, int, int, int]:
          "-show_entries", "stream=avg_frame_rate,width,height:format=duration",
          "-of", "csv=p=0", str(video)],
         capture_output=True, text=True, check=True).stdout.split()
-    width, height, rate = out[0].split(",")
+    # first three, not all of them: ffprobe's csv writer emits a trailing empty
+    # column for some containers (an mp4 here, not the .insv beside it), and
+    # unpacking the whole split turned that into "too many values to unpack"
+    # from inside ingest, which says nothing about the file that caused it
+    width, height, rate = out[0].split(",")[:3]
     num, den = rate.split("/")
     fps = float(num) / float(den)
     return fps, int(float(out[1]) * fps), int(width), int(height)

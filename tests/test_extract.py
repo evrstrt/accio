@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from accio.core.extract import (PanoFrame, frame_numbers, front_lens,
-                                lens_files, load_panos, save_panos, sdk_cmd)
+                                lens_files, load_panos, probe, save_panos,
+                                sdk_cmd)
 from accio.core.params import ExtractParams
 
 
@@ -77,3 +78,29 @@ def test_load_panos_says_which_panoramas_are_missing(tmp_path):
 def test_panos_empty_walk(tmp_path):
     save_panos(tmp_path, [])
     assert load_panos(tmp_path) == []
+
+
+def fake_ffprobe(monkeypatch, stdout):
+    import subprocess as sp
+    from accio.core import extract as ex
+    monkeypatch.setattr(ex.shutil, "which", lambda _: "/usr/bin/ffprobe")
+    monkeypatch.setattr(ex.subprocess, "run", lambda *a, **k: sp.CompletedProcess(
+        a[0], 0, stdout=stdout, stderr=""))
+
+
+def test_probe_reads_the_stream_line(monkeypatch):
+    fake_ffprobe(monkeypatch, "3840,1920,30000/1001\n280.947333\n")
+    fps, frames, w, h = probe(Path("walk.insv"))
+    assert (w, h) == (3840, 1920)
+    assert fps == pytest.approx(29.97, abs=1e-2)
+    assert frames == pytest.approx(8420, abs=2)
+
+
+def test_probe_survives_a_trailing_empty_column(monkeypatch):
+    """ffprobe's csv writer emits one for some containers. An mp4 panorama hit
+    it where the .insv beside it did not, and ingest died on the unpack with an
+    error that named neither the file nor the field."""
+    fake_ffprobe(monkeypatch, "2048,1024,30/1,\n330.496000\n")
+    fps, frames, w, h = probe(Path("pano.mp4"))
+    assert (w, h, fps) == (2048, 1024, 30.0)
+    assert frames == 9914
