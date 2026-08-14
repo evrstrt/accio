@@ -12,13 +12,18 @@ import numpy as np
 
 from accio.core import extract
 from accio.core.extract import PanoFrame, pano_name
-from accio.core.params import FaceParams, GateParams, PipelineParams
+from accio.core.params import (DedupParams, FaceParams, GateParams,
+                               PipelineParams)
 from accio.jobs.pipeline import run_walk
 
 N_PANOS = 3
 PARAMS = PipelineParams(
     faces=FaceParams(size=32, yaws=(0, 180)),   # 2 faces per pano -> 6 rows
     gate=GateParams(dead=0.0),                  # keep every pano
+    # three panoramas spanning one second have no pairs 20s apart, so there is
+    # no far distribution to calibrate against and the default rule refuses.
+    # Fixed is what that refusal names, and this test is about the glue anyway.
+    dedup=DedupParams(rule="fixed"),
 )
 
 

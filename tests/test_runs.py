@@ -24,7 +24,7 @@ def test_a_run_records_what_it_took_and_what_it_gave(tmp_path):
     log_run(tmp_path, PipelineParams(), CALIB, "gate", 148, 103)
     (r,) = read_runs(tmp_path)
     assert r["backbone"] == PipelineParams().embed.model_name
-    assert (r["tau"], r["rule"]) == (0.94, "fixed")
+    assert (r["tau"], r["rule"]) == (0.94, "calibrated")
     assert (r["reference"], r["pairs"]) == (0.9815, 40)
     assert (r["faces"], r["anchors"], r["absorbed"]) == (148, 103, 45)
     assert r["from"] == "gate"

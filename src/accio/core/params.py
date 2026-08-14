@@ -169,13 +169,28 @@ class CalibParams:
 @dataclass(frozen=True)
 class DedupParams:
     """Greedy cosine dedup, per walk (cross-walk near-duplicates are different
-    walls that look alike)."""
+    walls that look alike).
 
-    tau: float = 0.94         # a starting point, not a measurement: what it
-                              # merges depends entirely on the site
-    rule: str = "fixed"       # "fixed" uses tau as given; "calibrated" takes it
-                              # from the walk's own far-apart pairs, at the
-                              # false-merge budget, and writes it back into tau
+    Calibrated by default, because a cosine threshold is a property of the
+    site and the backbone, not a constant. Measured across the walks on hand,
+    the calibrated value runs from 0.8371 to 0.9438, and the low end is not an
+    outlier: a 2048x1024 pre-stitched walk landed there and, run at the fixed
+    0.94 instead, shipped 1637 of 2632 faces with 98% of them holding a twin
+    above its own threshold. Two frames of the same wall a second apart came
+    to 0.9372 and were kept as separate exports.
+
+    Calibration already runs on every walk and writes calibration.json, so
+    this costs nothing but reading what is already there.
+    """
+
+    tau: float = 0.94         # a starting point, not a measurement: it is what
+                              # the fixed rule uses and where calibration
+                              # writes its answer
+    rule: str = "calibrated"  # from the walk's own far-apart pairs at the
+                              # false-merge budget, written back into tau.
+                              # "fixed" uses tau as given, and is the fallback
+                              # for a walk too short to have a far
+                              # distribution, which apply_rule names.
 
     # A frame absorbed by nobody has no sharper twin to be swapped for, so it
     # is the one route by which a smear reaches a labeller. Judged against the

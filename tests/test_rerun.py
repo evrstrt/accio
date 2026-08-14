@@ -24,7 +24,9 @@ BLURRED = 2                                     # the one smeared panorama
 PARAMS = PipelineParams(
     faces=FaceParams(size=32, yaws=(45, 225)),
     gate=GateParams(dead=0.0),                  # veto nothing
-    dedup=DedupParams(solo_floor=0.0),          # and keep every group of one
+    # fixed, so that a test moving tau is testing tau: under the default rule
+    # the calibration stub writes its own number straight back over it
+    dedup=DedupParams(rule="fixed", solo_floor=0.0),
 )
 CALIB = {"tau": 0.94, "falseMergePct": 1.0, "farSeconds": 20.0, "samples": 10,
          "pairs": [], "healthy": True, "referenceError": "",

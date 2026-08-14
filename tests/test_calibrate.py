@@ -6,12 +6,14 @@ measurement. The reference is a health check on the stitch, and when it cannot
 be taken the run says so rather than inventing a threshold.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 from accio.core.calibrate import (MIN_FAR, far_cosines, record, resolve_tau,
                                   sample_panos, thin)
-from accio.core.params import CalibParams, PipelineParams
+from accio.core.params import CalibParams, DedupParams, PipelineParams
 from accio.jobs.pipeline import apply_rule
 from accio.server.app import Rerun, merge
 
@@ -88,18 +90,29 @@ def test_too_few_far_pairs_measures_no_threshold_at_all():
 
 
 def test_an_unmeasured_threshold_refuses_the_calibrated_rule():
-    p = PipelineParams()
-    p = p.__class__(**{**p.__dict__, "dedup": p.dedup.__class__(rule="calibrated")})
+    """Which is the default, so a walk too short to measure fails loudly rather
+    than running on a constant that only looks like a measurement."""
     with pytest.raises(ValueError, match="too few to set a threshold"):
-        apply_rule(p, record(pairs([0.98] * 12), far(MIN_FAR - 1),
-                             CalibParams(), 0.04))
+        apply_rule(PipelineParams(), record(pairs([0.98] * 12),
+                                            far(MIN_FAR - 1), CalibParams(), 0.04))
 
 
 def test_the_fixed_rule_is_unaffected_by_a_short_walk():
-    p = PipelineParams()          # rule is "fixed"
+    """The fallback the error above names."""
+    p = replace(PipelineParams(), dedup=DedupParams(rule="fixed"))
     got = apply_rule(p, record(pairs([0.98] * 12), far(MIN_FAR - 1),
                                CalibParams(), 0.04))
     assert got.dedup.tau == p.dedup.tau
+
+
+def test_the_calibrated_rule_is_the_default_and_writes_the_measurement_back():
+    """A cosine threshold is a property of the site and the backbone. Measured
+    across the walks on hand the calibrated value spans 0.8371 to 0.9438, which
+    is why no constant serves them all."""
+    assert PipelineParams().dedup.rule == "calibrated"
+    r = record(pairs([0.98] * 12), far(), CalibParams(), 0.04)
+    got = apply_rule(PipelineParams(), r)
+    assert got.dedup.tau == r["tau"] != DedupParams().tau
 
 
 # --- the record ------------------------------------------------------------
