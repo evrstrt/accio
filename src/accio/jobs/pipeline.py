@@ -329,6 +329,33 @@ def read_segmentation(out: Path) -> dict:
 RUNS_FILE = "runs.jsonl"
 RUNS_KEPT = 20
 ERROR_FILE = "error.json"
+JOB_FILE = "job.json"
+
+
+def save_job(out: Path, first: str | None) -> None:
+    """A run is coming: written at submit, removed when the run resolves.
+
+    Jobs live in the runner's memory, and two kinds of death left no other
+    trace for recover() to find. A job killed while still queued has no
+    directory at all, so the walk's video and DB row become invisible to every
+    route. A re-run killed mid-stage leaves last run's manifest.csv behind,
+    which recover() used to read as "this walk is fine" while the faces the
+    manifest points at were already half rebuilt. The sentinel outlives the
+    process, so both become one Retry click instead.
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    atomic.write_json(out / JOB_FILE, {
+        "stage": first or "",
+        "at": datetime.now().isoformat(timespec="seconds")}, indent=1)
+
+
+def clear_job(out: Path) -> None:
+    (out / JOB_FILE).unlink(missing_ok=True)
+
+
+def read_job(out: Path) -> dict | None:
+    path = out / JOB_FILE
+    return json.loads(path.read_text()) if path.exists() else None
 
 
 def save_failure(out: Path, stage: str, message: str, detail: str = "") -> None:

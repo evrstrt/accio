@@ -17,7 +17,8 @@ from ..core import extract
 from ..core.embed import Embedder, TimmEmbedder
 from ..core.segment import OpenVocabSegmenter, SemanticSegmenter, Segmenter
 from ..core.params import PipelineParams
-from .pipeline import ERROR_FILE, STAGES, rerun, run_walk, save_failure
+from .pipeline import (ERROR_FILE, STAGES, clear_job, read_job, rerun,
+                       run_walk, save_failure, save_job)
 
 
 @dataclass
@@ -79,10 +80,30 @@ class Runner:
         if not self.out_root.exists():
             return
         for walk in self.out_root.iterdir():
-            if not walk.is_dir() or not (walk / "source.json").exists():
+            if not walk.is_dir():
+                continue
+            job = read_job(walk)
+            if job is not None:
+                # a sentinel that outlived the process is a queued or running
+                # job the process took with it. Its stage is where a re-run
+                # entered ('' for a fresh ingest, which falls through to the
+                # heuristic below); Retry re-enters there and reuses the disk
+                # state above it, stale manifest included.
+                stitched = (walk / "pano" / extract.PANO_INDEX).exists()
+                save_failure(
+                    walk, job.get("stage")
+                    or ("gate" if stitched else "stitch"),
+                    "the server stopped before this run finished",
+                    "No failure was recorded because the process did not live "
+                    "to write one. Retry runs it again from where it entered.")
+                clear_job(walk)
+                continue
+            if not (walk / "source.json").exists():
                 continue
             if (walk / "manifest.csv").exists() or (walk / ERROR_FILE).exists():
                 continue
+            # walks from before the sentinel existed: a fresh ingest that died
+            # mid-run left panoramas, no manifest and no failure
             stitched = (walk / "pano" / extract.PANO_INDEX).exists()
             save_failure(
                 walk, "gate" if stitched else "stitch",
@@ -152,6 +173,9 @@ class Runner:
         """A fresh ingest (first=None) or a re-run entering at `first`."""
         job = Job(id=next(self._ids), walkId=walk_id or video.stem, video=video,
                   first=first, params=params)
+        # on disk before it is in the queue: a job the process dies holding
+        # otherwise leaves a video and a DB row nothing can list or retry
+        save_job(self.out_root / job.walkId, first)
         self.jobs[job.id] = job
         self._q.put(job)
         return job
@@ -206,3 +230,7 @@ class Runner:
                           if st == "error"), "")
             save_failure(self.out_root / job.walkId, broke, str(e) or
                          type(e).__name__, job.error)
+        finally:
+            # resolved either way: error.json or the run's own output now
+            # says what recover() would otherwise have to guess
+            clear_job(self.out_root / job.walkId)

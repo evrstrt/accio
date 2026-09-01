@@ -10,7 +10,7 @@ import json
 import pytest
 
 from accio.core import extract
-from accio.jobs.pipeline import ERROR_FILE, read_failure
+from accio.jobs.pipeline import (ERROR_FILE, read_failure, read_job, save_job)
 from accio.jobs.runner import Runner
 
 
@@ -77,6 +77,45 @@ def test_a_directory_that_is_not_a_walk_is_ignored(tmp_path):
 def test_recovering_an_empty_or_missing_root_is_not_an_error(tmp_path):
     Runner(tmp_path / "nothing" / "here").recover()
     Runner(tmp_path).recover()
+
+
+def test_a_job_killed_while_still_queued_becomes_a_visible_failure(tmp_path):
+    """Jobs live in the runner's memory. One killed before it started used to
+    leave a video and a DB row with no directory: not listed, not retryable,
+    not deletable. The sentinel submit() writes is the trace recover() needs."""
+    save_job(tmp_path / "never-started", None)
+    Runner(tmp_path).recover()
+    assert read_failure(tmp_path / "never-started")["stage"] == "stitch"
+    assert read_job(tmp_path / "never-started") is None
+
+
+def test_a_rerun_killed_mid_stage_is_not_mistaken_for_a_finished_walk(tmp_path):
+    """A re-run rebuilds faces/ before it rewrites the manifest, so last run's
+    manifest survives the crash and used to read as 'this walk is fine'."""
+    d = walk(tmp_path, "rerun-died", manifest=True)
+    save_job(d, "faces")
+    Runner(tmp_path).recover()
+    assert read_failure(d)["stage"] == "faces"    # where retry re-enters
+    assert read_job(d) is None
+
+
+def test_submit_puts_the_sentinel_on_disk_before_the_queue(tmp_path, monkeypatch):
+    monkeypatch.setattr(Runner, "_work", lambda self: None)
+    r = Runner(tmp_path)
+    r.submit(tmp_path / "w1.insv")
+    assert read_job(tmp_path / "w1") is not None
+
+
+def test_a_job_that_resolves_clears_its_sentinel(tmp_path, monkeypatch):
+    """Done or failed, the walk's own files now say what happened; a sentinel
+    left behind would re-mark the walk broken on the next restart."""
+    monkeypatch.setattr(Runner, "_work", lambda self: None)
+    r = Runner(tmp_path)
+    job = r.submit(tmp_path / "no-such.insv")
+    r._run_one(job)
+    assert job.status == "error"
+    assert read_failure(tmp_path / "no-such") is not None
+    assert read_job(tmp_path / "no-such") is None
 
 
 def test_the_worker_survives_a_handler_that_fails(tmp_path):
