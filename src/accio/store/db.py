@@ -10,6 +10,7 @@ is evidence the auto-pick rule needs changing (see the labelling doc, item 4).
 """
 
 import sqlite3
+import threading
 from pathlib import Path
 
 SCHEMA = """
@@ -39,13 +40,22 @@ CREATE INDEX IF NOT EXISTS ix_decisions_anchor ON decisions (walk_id, anchor, id
 """
 
 
+# Connections are per thread and the server opens one lazily on each thread's
+# first request, so a redeploy that adds a column used to race itself: two
+# threads read the same PRAGMA table_info, both decided to ALTER, and the
+# second died with "duplicate column name" as a bare 500. The check-then-act
+# below is only sound one connect at a time.
+_migrate_lock = threading.Lock()
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
-    _retire_index_decisions(conn)
-    conn.executescript(SCHEMA)
-    _add_missing_walk_columns(conn)
+    with _migrate_lock:
+        _retire_index_decisions(conn)
+        conn.executescript(SCHEMA)
+        _add_missing_walk_columns(conn)
     return conn
 
 
