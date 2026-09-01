@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "httpx>=0.28"]  # TestClient speaks httpx
 
 # On Linux, PyPI's torch bundles the CUDA runtime: ~2.5 GB of nvidia-* wheels
 # that a CPU-only server pulls, stores and never calls. macOS wheels are

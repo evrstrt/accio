@@ -41,6 +41,11 @@ WEB_DIST = Path(os.environ.get("ACCIO_WEB_DIST",
 # has a chance to finish.
 MODEL_CACHE = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
 
+# Per-ingest ceiling. Sized for the real thing (a half-hour dual-lens 5.7K
+# walk is ~20 GB across both files), not as a security boundary: the ingest
+# route also refuses to take the volume's last gigabytes, whatever this says.
+MAX_UPLOAD_BYTES = int(float(os.environ.get("ACCIO_MAX_UPLOAD_GB", "40")) * 2**30)
+
 
 def host_path(path: Path) -> Path:
     """The name a sibling container's bind mount has to use for `path`.

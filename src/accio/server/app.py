@@ -17,6 +17,7 @@ import os
 import shutil
 import tempfile
 import threading
+from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -44,7 +45,23 @@ WALKS_ROOT = DATA_ROOT / "walks"
 # archive cannot fill a container's writable layer instead.
 EXPORT_TMP = DATA_ROOT / ".exports"
 
-app = FastAPI(title="accio")
+COPY_CHUNK = 8 * 2**20
+# an upload never takes the volume's last few gigabytes: the store and every
+# manifest write share it, and a full disk breaks them all at once
+FREE_HEADROOM = 5 * 2**30
+
+# The runner has to exist before the first request, not because of it. Its
+# recover() turns walks a dead process abandoned into visible failures with a
+# Retry button, and lazy creation only reached it through the mutating routes:
+# an operator who restarted the server and merely browsed saw those walks
+# queued forever, with the fix waiting on somebody uploading something.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    runner()
+    yield
+
+
+app = FastAPI(title="accio", lifespan=lifespan)
 
 _local = threading.local()
 _runner: Runner | None = None
@@ -142,6 +159,14 @@ def walk_summary(walk_id: str) -> tuple[int, set[str]]:
     return len(rows), anchors
 
 
+@app.get("/api/health")
+def health() -> dict:
+    """Answers while the process can serve at all; Docker restarts on silence.
+    A crashed worker loop cannot be seen from here, but that loop never exits
+    by construction (see Runner._work), so process liveness is the signal."""
+    return {"ok": True}
+
+
 @app.get("/api/walks")
 def walks() -> list[dict]:
     out = []
@@ -214,10 +239,25 @@ def ingest(
     hold = Path(tempfile.mkdtemp(dir=staging))
     try:
         saved = []
+        copied = 0
         for up in files:
             dst = hold / Path(up.filename).name
             with open(dst, "wb") as f:
-                shutil.copyfileobj(up.file, f)
+                while chunk := up.file.read(COPY_CHUNK):
+                    copied += len(chunk)
+                    # multipart carries no trustworthy size up front, so the
+                    # limits apply to the bytes as they land, before they land
+                    if copied > settings.MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            413, f"upload is over the "
+                                 f"{settings.MAX_UPLOAD_BYTES // 2**30} GB limit "
+                                 "(ACCIO_MAX_UPLOAD_GB raises it)")
+                    if shutil.disk_usage(hold).free < FREE_HEADROOM:
+                        raise HTTPException(
+                            507, "the data volume is nearly full; the store "
+                                 "and the walks live there too, so make room "
+                                 "before uploading")
+                    f.write(chunk)
             saved.append(dst)
         video = extract.front_lens(saved)
 
@@ -225,7 +265,12 @@ def ingest(
         # fisheye circle, so a _00_ on its own is half a sphere. Stitching it
         # anyway smears the front hemisphere across the back, which reads as a
         # bad stitch rather than the missing file it is.
-        _fps, _n, width, height = extract.probe(video)
+        try:
+            _fps, _n, width, height = extract.probe(video)
+        except extract.FfmpegNotFound:
+            raise
+        except RuntimeError as e:
+            raise HTTPException(422, str(e)) from e
         if extract.lenses_in_frame(width, height) == 1 and len(saved) < 2:
             raise HTTPException(422, f"{video.name} is {width}x{height}: one lens "
                                      "of a two-file recording. Upload its _10_ "
@@ -668,11 +713,13 @@ def calibration(walk_id: str) -> dict:
 
 
 @app.get("/api/walks/{walk_id}/calib/{name}")
-def calib_image(walk_id: str, name: str) -> FileResponse:
+def calib_image(walk_id: str, name: str, w: int | None = None) -> FileResponse:
     path = (walk_dir(walk_id) / "calib" / name).resolve()
     if not path.is_relative_to(WALKS_ROOT) or not path.exists():
         raise HTTPException(404, "no such calibration face")
-    return FileResponse(path)
+    # the modal draws these around 100 px, and the originals are ~280 KB each
+    # times up to `samples` pairs; sized like the face grids are
+    return FileResponse(sized(path, walk_dir(walk_id) / "thumbs" / "calib", w))
 
 
 @app.get("/api/walks/{walk_id}/export")
@@ -761,17 +808,22 @@ def face_image(walk_id: str, name: str, w: int | None = None) -> FileResponse:
     path = (faces / name).resolve()
     if not path.is_relative_to(faces.resolve()) or not path.exists():
         raise HTTPException(404, "no such face")
-    if w is None:
-        return FileResponse(path)
-    if w not in THUMB_WIDTHS:
-        raise HTTPException(422, f"thumbnail width must be one of "
-                                 f"{sorted(THUMB_WIDTHS)}")
-    return FileResponse(thumbnail(path, walk_dir(walk_id) / "thumbs", w))
+    return FileResponse(sized(path, walk_dir(walk_id) / "thumbs", w))
 
 
 # a fixed set, so the route cannot be asked to fill a disk with one cache
 # entry per width somebody happened to type
 THUMB_WIDTHS = {256}
+
+
+def sized(path: Path, cache: Path, w: int | None) -> Path:
+    """The image itself, or its cached thumbnail at an allowed width."""
+    if w is None:
+        return path
+    if w not in THUMB_WIDTHS:
+        raise HTTPException(422, f"thumbnail width must be one of "
+                                 f"{sorted(THUMB_WIDTHS)}")
+    return thumbnail(path, cache, w)
 
 
 def thumbnail(src: Path, cache: Path, width: int) -> Path:
