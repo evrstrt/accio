@@ -288,15 +288,15 @@ def walk_detail(walk_id: str) -> dict:
         if not f["kept"]:
             continue
         s = state.get(rows[f["idx"]]["path"], {"pick": None, "dropped": False})
-        pick = idx_of.get(s["pick"]) if s["pick"] else None
         # the machine's choice is the anchor, which dedup visited sharpest
-        # first; the human's overrides it
+        # first; the human's overrides it, for as long as the picked face is
+        # still in this group (a reselect regroups under the log's feet)
         groups.append({
             "anchor": f,
             "members": sorted((m for m in faces if m["anchor"] == f["idx"]),
                               key=lambda m: -m["cosine"]),
             "auto": f["idx"],
-            "pick": pick if pick is not None else f["idx"],
+            "pick": export.resolve_pick(rows, idx_of, f["idx"], s["pick"]),
             "dropped": s["dropped"],
         })
     return {"id": walk_id, "faces": len(faces), "groups": groups,

@@ -69,10 +69,32 @@ def test_effective_picks_report_the_anchor_they_came_from():
 
 
 def test_effective_picks_survive_a_renumbered_manifest():
-    """The point of keying on names: shift every row and the swap holds."""
+    """The point of keying on names: shift every row and the swap holds.
+    write_manifest renumbers the anchor column with the rows, so the reversed
+    fixture points y045_00001 at its anchor's new index."""
     shifted = [dict(r, pano_idx=str(int(r["pano_idx"]) + 1)) for r in ROWS[::-1]]
+    shifted[1]["anchor"] = "2"
     picks = effective_picks(shifted, SWAP)
     assert [r["path"] for _, _, r in picks] == ["y135_00002.jpg", "y045_00001.jpg"]
+
+
+def test_a_pick_that_left_the_group_falls_back_to_the_anchor():
+    """A reselect can promote an absorbed member to its own anchor. Honouring
+    the stored pick then would export that frame twice under one name, so the
+    pick only holds while the picked face is still in the group."""
+    regrouped = [dict(r) for r in ROWS]
+    regrouped[1].update(kept="1", anchor="", cosine="")   # y045_00001 promoted
+    picks = effective_picks(regrouped, SWAP)
+    assert [(a, p) for a, p, _ in picks] == [(0, 0), (1, 1), (2, 2)]
+    assert review_counts(regrouped, SWAP) == (0, 0)
+
+
+def test_a_pick_that_moved_to_another_group_falls_back_too():
+    regrouped = [dict(r) for r in ROWS]
+    regrouped[1]["anchor"] = "2"                          # absorbed elsewhere
+    assert [(a, p) for a, p, _ in effective_picks(regrouped, SWAP)] == \
+        [(0, 0), (2, 2)]
+    assert review_counts(regrouped, SWAP) == (0, 0)
 
 
 def test_review_counts_separate_drops_from_swaps():

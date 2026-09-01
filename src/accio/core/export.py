@@ -38,6 +38,24 @@ def export_name(prefix: str, t_sec: float, yaw: int) -> str:
     return f"{prefix}_t{t_sec:06.1f}_y{yaw:03d}.jpg"
 
 
+def resolve_pick(rows: list[dict], idx_of: dict[str, int], anchor_idx: int,
+                 pick: str | None) -> int:
+    """The manifest index a stored pick means today, or the anchor.
+
+    A pick only means something while the picked face is still in the anchor's
+    group. A reselect regroups without touching the decisions log, so a stored
+    pick can now name a face that became its own anchor or moved to another
+    group; honouring it would export that frame twice under one name. Such a
+    pick falls back to the anchor, same as one naming a face that is gone.
+    """
+    if not pick:
+        return anchor_idx
+    j = idx_of.get(pick)
+    if j is None or (j != anchor_idx and rows[j]["anchor"] != str(anchor_idx)):
+        return anchor_idx
+    return j
+
+
 def effective_picks(rows: list[dict],
                     state: dict[str, dict]) -> list[tuple[int, int, dict]]:
     """(anchor_idx, pick_idx, manifest_row) per surviving group, in walk order.
@@ -56,7 +74,7 @@ def effective_picks(rows: list[dict],
         s = state.get(r["path"], {"pick": None, "dropped": False})
         if s["dropped"]:
             continue
-        pick = idx_of.get(s["pick"], i) if s["pick"] else i
+        pick = resolve_pick(rows, idx_of, i, s["pick"])
         picks.append((i, pick, rows[pick]))
     return picks
 
@@ -68,14 +86,15 @@ def review_counts(rows: list[dict], state: dict[str, dict]) -> tuple[int, int]:
     longer anchors are kept in the log but do not count against this run, or
     the funnel would report drops the export cannot show.
     """
-    anchors = {r["path"] for r in rows if r["kept"] == "1"}
+    idx_of = {r["path"]: i for i, r in enumerate(rows)}
     dropped = overridden = 0
-    for anchor, s in state.items():
-        if anchor not in anchors:
+    for i, r in enumerate(rows):
+        if r["kept"] != "1" or r["path"] not in state:
             continue
+        s = state[r["path"]]
         if s["dropped"]:
             dropped += 1
-        elif s["pick"] and s["pick"] != anchor:
+        elif resolve_pick(rows, idx_of, i, s["pick"]) != i:
             overridden += 1
     return dropped, overridden
 
