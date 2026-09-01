@@ -1,3 +1,4 @@
+import { thumb } from './api'
 import type { Calibration } from './api'
 
 // How tau was arrived at. Two numbers, and they answer different questions.
@@ -96,10 +97,10 @@ export default function CalibrationModal({ walkId, calib, onClose }: {
           {calib.pairs.map((p) => (
             <div className="calib-pair" key={`${p.pano}-${p.yaw}`}>
               <div className="calib-imgs">
-                <img src={url(`faces/${p.face}`)} alt={`kept frame at ${p.tSec}s`}
-                     loading="lazy" />
-                <img src={url(`calib/${p.neighbour}`)} alt={`${ms} ms later`}
-                     loading="lazy" />
+                <img src={thumb(url(`faces/${p.face}`))}
+                     alt={`kept frame at ${p.tSec}s`} loading="lazy" />
+                <img src={thumb(url(`calib/${p.neighbour}`))}
+                     alt={`${ms} ms later`} loading="lazy" />
               </div>
               <div className="calib-meta">
                 <span>t={p.tSec}s y{p.yaw}</span>

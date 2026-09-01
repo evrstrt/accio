@@ -392,8 +392,18 @@ export default function App() {
       .catch((e) => setError(String(e)))
   }, [])
 
+  // Which walk the in-flight loads belong to. Click walk A then walk B fast
+  // enough and A's slower response lands after B's, putting A's groups under
+  // B's name — and group indices are small per-walk integers, so a decision
+  // clicked on that grid posts A's anchorIdx against B and the server applies
+  // it to whichever of B's groups happens to wear that number. Every async
+  // setter that names a walk checks this ref before landing.
+  const selectedRef = useRef<string | null>(null)
+
   useEffect(() => {
+    selectedRef.current = selected
     if (!selected) return
+    const id = selected
     setWalk(null)
     setView('pipeline')
     setInspect(null)
@@ -407,16 +417,25 @@ export default function App() {
     setSeg(null)
     // a walk that will not load is not a walk that is still loading: without
     // this the canvas sits on "Loading…" forever and never says why
-    fetchWalk(selected)
-      .then((w) => { setWalk(w); setUnreachable(null) })
+    fetchWalk(id)
+      .then((w) => {
+        if (selectedRef.current !== id) return
+        setWalk(w)
+        setUnreachable(null)
+      })
       .catch((e) => {
+        if (selectedRef.current !== id) return
         setWalk(null)
         setUnreachable(e instanceof Error ? e.message : String(e))
       })
     // measured on every run, so only walks made before it exists lack a record
-    fetchCalibration(selected).then(setCalib).catch(() => setCalib(null))
+    fetchCalibration(id)
+      .then((c) => { if (selectedRef.current === id) setCalib(c) })
+      .catch(() => { if (selectedRef.current === id) setCalib(null) })
     // 404s until the Segment stage has been turned on for this walk
-    fetchSegmentation(selected).then(setSeg).catch(() => setSeg(null))
+    fetchSegmentation(id)
+      .then((s) => { if (selectedRef.current === id) setSeg(s) })
+      .catch(() => { if (selectedRef.current === id) setSeg(null) })
   }, [selected])
 
   useEffect(() => {
@@ -443,8 +462,9 @@ export default function App() {
       fetchCalibration(id).catch(() => null),
       fetchSegmentation(id).catch(() => null),
     ]).then(([w, ws, c, s]) => {
-      setWalk(w)
       setWalks(ws)
+      if (selectedRef.current !== id) return
+      setWalk(w)
       setCalib(c)
       setSeg(s)
     }), [])
@@ -584,7 +604,9 @@ export default function App() {
       // happen. Only on failure; the happy path already matches.
       .catch((e) => {
         setError(String(e))
-        fetchWalk(selected).then(setWalk).catch(() => {})
+        fetchWalk(selected)
+          .then((w) => { if (selectedRef.current === selected) setWalk(w) })
+          .catch(() => {})
       })
   }, [selected])
 
