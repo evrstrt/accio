@@ -6,7 +6,12 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # Loopback only, on purpose. The API has no authentication, and this
+      # container holds the host's Docker socket: reachable from the network,
+      # any code-execution bug in the upload surface is host root. Whatever
+      # exposes it (a reverse proxy with auth, an SSH tunnel, a VPN) does so
+      # explicitly, on the host, in front of this.
+      - "127.0.0.1:8000:8000"
     environment:
       # the same value as the mount below, which is the whole trick: it makes
       # every path this process computes true for the host's daemon too, so
@@ -21,6 +26,23 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # ~1.2 GB of weights, fetched once instead of on every restart
       - models:/models
+    # restart: unless-stopped only fires on exit. A process that is up but no
+    # longer answering (a starved event loop, a wedged interpreter) shows as
+    # unhealthy here, which is what monitoring and `docker ps` can see; Docker
+    # itself does not restart on unhealthy, so something watching must. curl
+    # is not in the image; python always is.
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # DINOv3 plus an optional Grounding DINO + SAM segmenter peak around 6 GB
+    # on CPU; the cap is headroom over that, not a target. Without one, a bad
+    # ingest competes with the host's OOM killer against everything else on
+    # the machine. Raise it before adding a heavier backbone.
+    mem_limit: 12g
 
 volumes:
   models:

@@ -5,6 +5,12 @@
 # Docker daemon through the mounted socket, so the container needs the docker
 # client but not the daemon. That is also why the data root has to be mounted
 # at the same path inside and out: see accio/settings.py.
+#
+# It runs as root, and that is a consequence of the socket: a non-root user
+# would need the host's docker group GID baked in, which is not portable, and
+# the socket makes anyone holding it host root anyway. The mitigation is on
+# the other side: compose publishes the port on loopback only, so nothing
+# reaches this process except what the host explicitly puts in front of it.
 
 # --- the frontend ----------------------------------------------------------
 FROM node:22-alpine AS web
