@@ -80,12 +80,12 @@ def test_panos_empty_walk(tmp_path):
     assert load_panos(tmp_path) == []
 
 
-def fake_ffprobe(monkeypatch, stdout):
+def fake_ffprobe(monkeypatch, stdout, returncode=0, stderr=""):
     import subprocess as sp
     from accio.core import extract as ex
     monkeypatch.setattr(ex.shutil, "which", lambda _: "/usr/bin/ffprobe")
     monkeypatch.setattr(ex.subprocess, "run", lambda *a, **k: sp.CompletedProcess(
-        a[0], 0, stdout=stdout, stderr=""))
+        a[0], returncode, stdout=stdout, stderr=stderr))
 
 
 def test_probe_reads_the_stream_line(monkeypatch):
@@ -104,3 +104,23 @@ def test_probe_survives_a_trailing_empty_column(monkeypatch):
     fps, frames, w, h = probe(Path("pano.mp4"))
     assert (w, h, fps) == (2048, 1024, 30.0)
     assert frames == 9914
+
+
+def test_probe_names_a_file_ffprobe_rejects(monkeypatch):
+    """The likeliest bad upload is not a video at all, and ingest surfaces
+    this message as the 422, so it has to carry the file's name."""
+    fake_ffprobe(monkeypatch, "", returncode=1, stderr="Invalid data found")
+    with pytest.raises(RuntimeError, match=r"holiday\.pdf.*Invalid data"):
+        probe(Path("holiday.pdf"))
+
+
+@pytest.mark.parametrize("stdout", [
+    "\n",                              # no video stream at all
+    "3840,1920,0/0\n280.9\n",          # indeterminate frame rate
+    "3840,1920,30/1\nN/A\n",           # unknown duration
+    "3840,1920\n280.9\n",              # fewer fields than asked for
+])
+def test_probe_names_a_file_it_cannot_measure(monkeypatch, stdout):
+    fake_ffprobe(monkeypatch, stdout)
+    with pytest.raises(RuntimeError, match=r"odd\.bin"):
+        probe(Path("odd.bin"))

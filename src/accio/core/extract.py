@@ -68,19 +68,31 @@ def probe(video: Path) -> tuple[float, int, int, int]:
     """fps, frames, width, height of the raw recording."""
     if shutil.which("ffprobe") is None:
         raise FfmpegNotFound("ffprobe not on PATH; install it (brew install ffmpeg)")
-    out = subprocess.run(
+    ran = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=avg_frame_rate,width,height:format=duration",
          "-of", "csv=p=0", str(video)],
-        capture_output=True, text=True, check=True).stdout.split()
-    # first three, not all of them: ffprobe's csv writer emits a trailing empty
-    # column for some containers (an mp4 here, not the .insv beside it), and
-    # unpacking the whole split turned that into "too many values to unpack"
-    # from inside ingest, which says nothing about the file that caused it
-    width, height, rate = out[0].split(",")[:3]
-    num, den = rate.split("/")
-    fps = float(num) / float(den)
-    return fps, int(float(out[1]) * fps), int(width), int(height)
+        capture_output=True, text=True)
+    if ran.returncode:
+        raise RuntimeError(f"{video.name} is not a video ffprobe can read: "
+                           f"{ran.stderr.strip()[:300] or 'no video stream'}")
+    out = ran.stdout.split()
+    # Wrong file types get this far: ffprobe exits 0 on a container with no
+    # video stream, and answers "0/0" or "N/A" for what it cannot measure.
+    # Those are the operator picking the wrong file, so they get the file's
+    # name back, not a parse error from inside ingest.
+    try:
+        # first three, not all of them: ffprobe's csv writer emits a trailing
+        # empty column for some containers (an mp4 here, not the .insv beside
+        # it), and unpacking the whole split turned that into "too many values
+        # to unpack"
+        width, height, rate = out[0].split(",")[:3]
+        num, den = rate.split("/")
+        fps = float(num) / float(den)
+        return fps, int(float(out[1]) * fps), int(width), int(height)
+    except (IndexError, ValueError, ZeroDivisionError) as e:
+        raise RuntimeError(f"{video.name} has no video stream ffprobe can "
+                           "measure; is it a video?") from e
 
 
 def probe_fps_nframes(video: Path) -> tuple[float, int]:
