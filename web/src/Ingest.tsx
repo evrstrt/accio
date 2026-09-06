@@ -4,12 +4,8 @@ import type { Job } from './api'
 import { readCamera, readFrameSize, stampFromName, whyNotReady } from './insv'
 import type { FrameSize } from './insv'
 
-// The capture metadata that makes the dataset balanceable later. Only what
-// the file cannot answer is asked: the camera model and the moment of the
-// walk are read out of the .insv at ingest. A value typed here still wins,
-// for a walk uploaded long after it was shot off a camera clock nobody set.
-// `need` marks what nobody else can supply. The date and time are not on that
-// list because the file already answers them; typing them is the exception.
+// `need` marks fields the file cannot supply; date and time come from the
+// .insv and a typed value overrides them
 const FIELDS = [
   { name: 'site', label: 'Site', placeholder: 'GCMR', need: true },
   { name: 'building', label: 'Building', placeholder: 'tower 2', need: true },
@@ -32,9 +28,7 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
   const [dragOver, setDragOver] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
 
-  // Measure the dropped files here rather than letting the server refuse them
-  // after the upload: a half-recording is knowable from the frame shape, and
-  // finding out costs a few kilobytes instead of half a gigabyte.
+  // a half-recording is knowable from the frame shape, for a few kilobytes instead of an upload
   useEffect(() => {
     let live = true
     setSizes([])
@@ -42,9 +36,7 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
     Promise.all(files.map((f) => readFrameSize(f).catch(() => null)))
       .then((s) => { if (live) setSizes(s) })
     if (!files.length) return
-    // Everything the file already knows, filled in on the spot rather than
-    // asked for: the camera out of Insta360's trailer, the moment off the
-    // camera's own clock in the name. Both stay editable.
+    // camera from the .insv trailer, timestamp from the file name; both stay editable
     const front = files.find((f) => f.name.includes('_00_')) ?? files[0]
     readCamera(front).then((c) => { if (live) setCamera(c) }).catch(() => {})
     const { date, time } = stampFromName(front.name)
@@ -54,12 +46,10 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
     }
     put('shot_date', date)
     put('shot_time', time)
-    recheck()
     return () => { live = false }
   }, [files])
 
-  // Uncontrolled inputs, read back on every keystroke: the form is the state,
-  // and mirroring eight fields into React buys nothing but drift.
+  // uncontrolled inputs; the form is the state
   const [missing, setMissing] = useState<string[]>([])
   const recheck = () => {
     const fd = new FormData(formRef.current!)
@@ -104,6 +94,14 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
           if (fs.length) setFiles(fs)
         }}
         onClick={() => document.getElementById('ingest-file')?.click()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            document.getElementById('ingest-file')?.click()
+          }
+        }}
+        role="button"
+        tabIndex={0}
       >
         {files.length
           ? `${files.map((f) => f.name).join(' + ')} (${gb.toFixed(2)} GB)`
@@ -139,7 +137,6 @@ export default function Ingest({ onSubmitted }: { onSubmitted: (job: Job) => voi
           : <>The camera and the time are read from the file; fill these in
               only if it got them wrong.</>}
       </div>
-      {/* say what is wrong with the selection while it can still be fixed */}
       {files.length > 0 && blocked && <div className="form-error">{blocked}</div>}
       {error && error !== blocked && <div className="form-error">{error}</div>}
       {busy && (

@@ -1,18 +1,9 @@
+import { useEffect, useRef } from 'react'
 import { thumb } from './api'
 import type { Calibration } from './api'
 
-// How tau was arrived at. Two numbers, and they answer different questions.
-//
-// τ comes from the far pairs: faces at one heading far enough apart to be
-// somewhere else. Merging those is the risk a threshold carries, so the budget
-// prices it directly. It runs generous, because a merge costs nothing
-// permanent (every face stays on disk, only the manifest changes) while an
-// under-cut walk has already been paid to label twice.
-//
-// The pairs shown below are the other measurement: a kept frame against the
-// raw frame milliseconds later. Identical content, so it says what this
-// walk's stitch and backbone are capable of. It is a health check, not the
-// threshold; a 40 ms gap says nothing about frames seconds apart.
+// how tau was placed. It comes from the far pairs; the reference pairs shown
+// below are a health check of the stitch and backbone, not the threshold.
 
 export default function CalibrationModal({ walkId, calib, onClose }: {
   walkId: string
@@ -21,6 +12,15 @@ export default function CalibrationModal({ walkId, calib, onClose }: {
 }) {
   const url = (p: string) => `/api/walks/${encodeURIComponent(walkId)}/${p}`
   const ms = Math.round(calib.gapSeconds * 1000)
+  const closeRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => { closeRef.current?.focus() }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   return (
     <>
@@ -28,7 +28,7 @@ export default function CalibrationModal({ walkId, calib, onClose }: {
       <div className="z-dialog calib" role="dialog" aria-label="Calibration">
         <div className="calib-head">
           <h2>Calibration</h2>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
+          <button className="icon-btn" ref={closeRef} onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M18 6 6 18M6 6l12 12" />
@@ -41,9 +41,8 @@ export default function CalibrationModal({ walkId, calib, onClose }: {
           one heading more than {calib.farSeconds}s apart. Those are different
           places, and {calib.falseMergePct}% of them are allowed to merge, so τ
           sits at the {(100 - calib.falseMergePct).toFixed(calib.falseMergePct % 1 ? 1 : 0)}th
-          {' '}percentile of what elsewhere scores here. Nothing is deleted:
-          every face stays on disk and a lower budget brings the merged ones
-          back, so this is cheaper to set too high than too low.
+          {' '}percentile of what elsewhere scores here. Every face stays on
+          disk, so a lower budget brings merged ones back.
         </p>
 
         <div className="calib-stats">
@@ -67,8 +66,8 @@ export default function CalibrationModal({ walkId, calib, onClose }: {
         <p className="calib-note">
           The {calib.reference.n} pairs below are the health check: a kept frame
           against the raw frame {ms} ms later, over {calib.samples} panoramas
-          spread across the walk. Identical content, so what they score is the
-          ceiling this stitch and this backbone can reach.
+          spread across the walk. Identical content, so this is the ceiling for
+          this stitch and backbone.
         </p>
 
         <div className="calib-stats">

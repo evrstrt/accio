@@ -13,8 +13,8 @@ export type Face = {
 export type Group = {
   anchor: Face
   members: Face[]
-  auto: number // idx the pipeline chose: the anchor, visited sharpest first
-  pick: number // idx of the effective pick (auto unless a human overrode it)
+  auto: number // idx the pipeline chose
+  pick: number // idx exported: auto unless a human overrode it
   dropped: boolean
 }
 
@@ -29,10 +29,10 @@ export type WalkMeta = {
   mountHeightCm: number | null
   shotDate: string
   shotTime: string
-  camera: string          // read out of the .insv, not typed
+  camera: string          // read from the .insv
 } | null
 
-// a run that broke, recorded next to whatever it managed to produce
+// a failed run, recorded next to whatever it produced
 export type Failure = {
   stage: string
   message: string
@@ -53,25 +53,25 @@ export type Stages = {
   frames: number
   seconds: number
   source: string         // the raw frame size, e.g. "3840x1920"
-  lenses: number         // fisheye circles the stitch actually had
+  lenses: number         // fisheye circles the stitch had
   panos: number
   sharp: number
   faces: number
-  pairs: number          // identical-frame pairs the health check measured
-  reference: number      // what those pairs scored, median
+  pairs: number          // identical-frame pairs in the health check
+  reference: number      // median cosine of those pairs
   farPairs: number       // far-apart pairs the threshold was placed against
-  calibTau: number       // the threshold that resolves to
+  calibTau: number       // the calibrated threshold
   segmented: number      // kept frames that carry a mask
   classMix: { name: string; share: number }[]
   anchors: number
   absorbed: number
-  solo: number          // groups of one dropped for being smeared
+  solo: number          // groups of one dropped for blur
   dropped: number
   overridden: number     // groups where a human swapped the auto pick
   kept: number
 }
 
-// the stage settings a walk was built with, as the server reports them
+// the stage settings a walk was built with
 export type PipelineSpec = {
   extract: { fps: number; pano_width: number; sdk_image: string }
   faces: { fov_deg: number; size: number; yaws: number[] }
@@ -86,24 +86,24 @@ export type PipelineSpec = {
     threshold: number
   }
   embed_model_used: string
-  backbones: string[]        // the models this walk could be re-embedded with
+  backbones: string[]        // models available for re-embedding
   segmenters: Record<string, string>   // model -> 'semantic' | 'open'
-  site_classes: string[]     // the default vocabulary for an open model
+  site_classes: string[]     // default vocabulary for an open model
 }
 
-// what one configuration produced, appended every time a run finishes
+// one finished run's configuration and counts
 export type Run = {
   at: string
   from: string           // the stage that run entered at
   backbone: string
   tau: number
   rule: string
-  reference: number      // what identical frames scored under that backbone
+  reference: number      // median cosine of identical frames under that backbone
   pairs: number
   faces: number
   anchors: number
   absorbed: number
-  solo: number          // groups of one dropped for being smeared
+  solo: number          // groups of one dropped for blur
 }
 
 export type WalkDetail = {
@@ -123,12 +123,12 @@ export type Job = {
   id: number
   walkId: string
   status: StageState
-  stage: string                            // the stage running right now
+  stage: string                            // the stage running now
   stages: Record<string, StageState>
   stats: Record<string, number>            // counts each stage emitted
   error: string
-  first: string                            // '' for an ingest, else where a re-run entered
-  params: Partial<PipelineSpec> | null     // the settings this run is using
+  first: string                            // '' for an ingest, else the stage a re-run entered at
+  params: Partial<PipelineSpec> | null     // the settings this run uses
 }
 
 export type Decision = {
@@ -137,30 +137,37 @@ export type Decision = {
   pickIdx?: number
 }
 
-/** FastAPI puts the reason in `detail`, as a string or a validation list.
-    Without it every failure reads the same and says nothing actionable. */
-export function serverSaid(body: string): string {
+/** FastAPI puts the reason in `detail`, as a string or a validation list. */
+function serverSaid(body: string): string {
   try {
     const detail = JSON.parse(body)?.detail
     return (Array.isArray(detail) ? detail[0]?.msg : detail) || ''
   } catch { return '' }
 }
 
-async function req<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init)
-  if (!res.ok) {
-    throw new Error(serverSaid(await res.text().catch(() => ''))
-      || `${res.status} ${res.statusText} for ${url}`)
+class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
   }
-  return res.json()
 }
 
-/** The same face at thumbnail width.
- *
- * The grids draw these around 150 px and the file is 1024 square at roughly
- * 280 KB, so the full one is about twelve times the bytes and fifty times the
- * pixels a tile needs. Only the expanded views ask for the original. */
-export const thumb = (url: string, w = 256) => `${url}?w=${w}`
+/** True for a 404, which several routes answer until a stage has run. */
+export const isMissing = (e: unknown) => e instanceof ApiError && e.status === 404
+
+async function ok(res: Response, url: string): Promise<Response> {
+  if (res.ok) return res
+  throw new ApiError(serverSaid(await res.text().catch(() => ''))
+    || `${res.status} ${res.statusText} for ${url}`, res.status)
+}
+
+async function req<T>(url: string, init?: RequestInit): Promise<T> {
+  return (await ok(await fetch(url, init), url)).json()
+}
+
+/** The same image at 256 px, the one thumbnail width the server serves; the 1024 original is about 280 KB. */
+export const thumb = (url: string) => `${url}?w=256`
 
 export const fetchWalks = () => req<WalkSummary[]>('/api/walks')
 export const fetchWalk = (id: string) =>
@@ -171,8 +178,8 @@ export const postDecision = (walkId: string, d: Decision) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(d),
   })
-// how a walk's identical-content reference was measured
-export type CalibPair = {
+// one identical-content pair of the health check
+type CalibPair = {
   pano: number
   yaw: number
   tSec: number
@@ -182,14 +189,14 @@ export type CalibPair = {
 }
 
 export type Calibration = {
-  tau: number | null              // null when the walk is too short to place one
+  tau: number | null              // null when there are too few far pairs
   falseMergePct: number
   farSeconds: number
   samples: number
   pairs: CalibPair[]
-  // what elsewhere scores, which is what tau is placed against
+  // far-apart pairs, which tau is placed against
   far: { n: number; median: number; p95: number; p99: number; max: number }
-  // the identical-content ceiling, kept as a health check on the stitch
+  // identical-content pairs, a health check on the stitch
   reference: { median: number; p05: number; min: number; n: number }
   healthy: boolean
   referenceError: string
@@ -199,7 +206,7 @@ export type Calibration = {
 export const fetchCalibration = (walkId: string) =>
   req<Calibration>(`/api/walks/${encodeURIComponent(walkId)}/calibration`)
 
-// the segmenter's output, per kept frame: the mask and what it is made of
+// the segmenter's output for one kept frame
 export type SegFrame = {
   face: string
   tSec: number
@@ -221,11 +228,7 @@ export const fetchSegmentation = (walkId: string) =>
 
 export const fetchJobs = () => req<Job[]>('/api/jobs')
 
-// Settings edited but not yet applied, by the section of the pipeline params
-// they belong to. The server folds them in and re-runs from the earliest stage
-// they invalidate, so the shape here is the shape it validates against.
-// what the walk was shot on and where. Nothing derived depends on it, so it
-// saves in place rather than re-running a stage.
+// saved in place; nothing derived depends on it
 export type MetaEdit = {
   site?: string
   building?: string
@@ -238,6 +241,8 @@ export type MetaEdit = {
   camera?: string
 }
 
+// edits not yet applied, by pipeline section; the server re-runs from the
+// earliest stage they invalidate
 export type Pending = {
   meta?: MetaEdit
   gate?: { dead?: number; band?: [number, number] }
@@ -255,20 +260,17 @@ export type Pending = {
 
 export type Section = keyof Pending
 
-// the stages a machine re-runs, in order; Video is the upload and Review is
-// people. Must match jobs.pipeline.STAGES on the server.
+// must match jobs.pipeline.STAGES on the server
 export const STAGES = ['stitch', 'gate', 'faces', 'embed', 'calibrate',
                        'select', 'segment']
 
-// which stage owns each section: editing it re-runs that stage and the rest.
-// `meta` is deliberately absent: it re-runs nothing.
+// the stage an edit to each section re-runs from; `meta` re-runs nothing
 export const STAGE_OF: Record<string, string> = {
   gate: 'gate', faces: 'faces', embed: 'embed', calib: 'calibrate',
   dedup: 'select', segment: 'segment',
 }
 
-/** A re-select answers with the new counts; anything heavier answers with the
-    job now running, and the canvas follows it from there. */
+/** New counts for a re-select; the job id for anything heavier. */
 export type RerunResult = {
   changed: boolean
   anchors?: number
@@ -290,6 +292,11 @@ export const deleteWalk = (walkId: string) =>
   req<{ deleted: string; videos: string[] }>(
     `/api/walks/${encodeURIComponent(walkId)}`, { method: 'DELETE' })
 
+export const exportZip = async (walkId: string): Promise<Blob> => {
+  const url = `/api/walks/${encodeURIComponent(walkId)}/export`
+  return (await ok(await fetch(url), url)).blob()
+}
+
 export const patchMeta = (walkId: string, m: MetaEdit) =>
   req<WalkMeta>(`/api/walks/${encodeURIComponent(walkId)}/meta`, {
     method: 'PATCH',
@@ -310,9 +317,6 @@ export const postIngest = (form: FormData, onProgress?: (frac: number) => void) 
         resolve(JSON.parse(xhr.responseText))
         return
       }
-      // the same `detail` the fetch path reads. A refused upload is refused
-      // for a reason the operator can act on ("upload the _10_ file too"),
-      // and a bare status code throws that away.
       reject(new Error(serverSaid(xhr.responseText)
         || `${xhr.status} ${xhr.statusText} for /api/ingest`))
     }

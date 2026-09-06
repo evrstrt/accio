@@ -1,14 +1,7 @@
-// The loading mark, the same one the ciq-demo free-roam viewer uses so the
-// two tools read as one product: the Technosoft logo drawing itself on, a
-// fixed extrusion whose contours draw in order (back face, walls, front face,
-// then the four cap lines that make the T read) on a 3.4 s loop.
-//
-// The geometry is baked. In the study it is generated from the octagon's
-// vertices, the counter ellipse and a depth vector; the depth never changes
-// here, so the one frame that generator produces is checked in instead. The
-// class names are load-bearing: `.bk` back face, `.w` walls, `.frfill` the
-// occluder, `.tbg` the T tint, `.fr` front contours, `.cap` the four lines.
-// Timing lives in index.css under `.tsx-loader`.
+// the Technosoft mark drawing itself on, shared with the ciq-demo viewer.
+// Geometry is baked. The class names (`.bk` back face, `.w` walls, `.frfill`
+// occluder, `.tbg` T tint, `.fr` front contours, `.cap` cap lines) are
+// referenced by `.tsx-loader` in index.css, which also holds the timing.
 
 const MARK = `
   <svg class="wf" xmlns="http://www.w3.org/2000/svg" viewBox="-5 0 842 850">
@@ -33,8 +26,6 @@ const MARK = `
   <path class="cap" d="M251.1 698.0L251.1 835.5"/></svg>
 `
 
-/** The mark is the progress indicator; the lines under it say what is coming
-    and, if it stops coming, why. No bar: there is no byte count to put in one. */
 export default function Loader({ label, sub, error }: {
   label: string
   sub?: string

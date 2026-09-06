@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { Calibration, Pending, Section, WalkDetail } from './api'
+import type { Calibration, MetaEdit, Pending, Section, WalkDetail } from './api'
+import { backboneLabel, segmenterLabel } from './labels'
 
-// Per-stage panels. Settings are live: editing one stages a re-run from the
-// stage it belongs to, and nothing happens until Apply. Where a stage has only
-// one implementation its component control is disabled rather than pretending
-// to offer a choice; Embed is the first one that has more than one.
+/** One staged edit: a key of the section's pending shape, with that key's value type. */
+export type Edit = <S extends Section, K extends keyof NonNullable<Pending[S]>>(
+  section: S, key: K, value: NonNullable<Pending[S]>[K]) => void
+
+// per-stage panels; an edit stages a re-run from its stage, applied on Apply
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -25,8 +27,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-/** A component choice we have exactly one implementation of, shown so the
-    pipeline says what it is made of, disabled so it cannot claim otherwise. */
+/** A component with a single implementation, shown disabled. */
 function Fixed({ value, options }: { value: string; options: string[] }) {
   const all = options.includes(value) ? options : [value, ...options]
   return (
@@ -42,17 +43,8 @@ function Toggle({ on }: { on: boolean }) {
                 onChange={() => {}} />
 }
 
-/** A number you can actually edit.
- *
- * The field holds what was typed; the staged value is what it parses to. The
- * previous version skipped onChange for an empty field, so the controlled
- * `value` never changed and React wrote the old digits straight back: you
- * could not backspace over 1024 to type 512 without selecting all first.
- *
- * Committing on blur rather than per keystroke also stops the pipeline staging
- * nonsense on the way to a real number: typing 110 into a field used to stage
- * 1, then 11, then 110, flashing "-89° of overlap per seam" in between.
- */
+/** Holds the raw text while editing and commits the parsed number on blur, so
+    intermediate values (1, 11, 110) never get staged. */
 function Num({ value, step, min, max, disabled, onChange }: {
   value: number
   step?: number
@@ -67,8 +59,7 @@ function Num({ value, step, min, max, disabled, onChange }: {
     const v = Number(text)
     setText(null)
     if (text === null || text.trim() === '' || !Number.isFinite(v)) return
-    // clamp here rather than trusting the spinner: min/max are advisory on a
-    // typed value, and the server 422s what it will not accept
+    // min/max are advisory on a typed value, so clamp here
     const bounded = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, v))
     if (bounded !== value) onChange(bounded)
   }
@@ -90,16 +81,8 @@ function Val({ children }: { children: ReactNode }) {
   return <span className="insp-value">{children}</span>
 }
 
-/** The class list, one per line.
- *
- * Same shape as Num and for the same reason: the textarea holds the raw text
- * and only blur parses it. Trimming inside onChange made the control
- * unusable, because a controlled value that has been through trim() and
- * filter(Boolean) can never hold a trailing newline or a trailing space.
- * Pressing Enter at the end of the list produced no line, and typing a space
- * after "concrete" deleted it before "column" could follow, so none of the
- * multi-word defaults could be typed at all.
- */
+/** One class per line. Raw text until blur: a controlled value that is trimmed
+    on change can never hold a trailing space or newline. */
 function Classes({ value, disabled, onChange }: {
   value: string[]
   disabled?: boolean
@@ -123,32 +106,12 @@ function Classes({ value, disabled, onChange }: {
   )
 }
 
-/** "vit_base_patch16_dinov3.lvd1689m" -> "DINOv3 ViT-B/16" */
-export function backboneLabel(name: string): string {
-  const m = /vit_(base|small|large)_patch(\d+)_(\w+?)[._]/.exec(name)
-  if (!m) return name
-  const size = { base: 'B', small: 'S', large: 'L' }[m[1]] ?? m[1]
-  const family = { dinov3: 'DINOv3', dinov2: 'DINOv2', clip: 'CLIP' }[m[3]] ?? m[3]
-  return `${family} ViT-${size}/${m[2]}`
-}
-
-/** "nvidia/segformer-b4-finetuned-ade-512-512" -> "SegFormer-B4 · ADE20K" */
-export function segmenterLabel(name: string): string {
-  const seg = /segformer-(b\d)-finetuned-ade/.exec(name)
-  if (seg) return `SegFormer-${seg[1].toUpperCase()} · ADE20K`
-  if (name.includes('mask2former')) return 'Mask2Former-L · ADE20K'
-  if (name.includes('oneformer')) return 'OneFormer-L · ADE20K'
-  if (name.includes('grounding-dino')) return 'Grounding DINO + SAM · your classes'
-  return name
-}
-
 function Out({ children }: { children: ReactNode }) {
   return <div className="insp-out">{children}</div>
 }
 
-/** Faces evenly around the sphere, offset so the stitch seams at yaw +-90 fall
-    on a face edge rather than through the middle of one. */
-export function yawRing(n: number): number[] {
+/** n headings, offset so the stitch seams at yaw +-90 fall on a face edge. */
+function yawRing(n: number): number[] {
   const spacing = 360 / n
   const first = (90 - spacing / 2 + 360) % spacing
   return Array.from({ length: n }, (_, i) => Math.round(first + i * spacing))
@@ -162,17 +125,16 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
   walk: WalkDetail
   pending: Pending
   calib: Calibration | null
-  locked: boolean          // a run is in flight: look, do not touch
-  onEdit: (section: Section, key: string, value: unknown) => void
+  locked: boolean          // a run is in flight
+  onEdit: Edit
   onOpenReview: () => void
   onShowCalibration: () => void
 }) {
   const { stages: s, pipeline: p, meta } = walk
-  // one gate rather than a `disabled` on each control: a staged edit during a
-  // run would be applied against settings the run is about to replace
-  const edit: typeof onEdit = (...a) => { if (!locked) onEdit(...a) }
+  // an edit staged during a run would apply against settings the run is about to replace
+  const edit: Edit = (...a) => { if (!locked) onEdit(...a) }
 
-  // what a control shows: the staged edit if there is one, else what ran
+  // staged edit if any, else what ran
   const gate = { ...p.gate, ...pending.gate }
   const faces = { ...p.faces, ...pending.faces }
   const emb = { ...p.embed, ...pending.embed }
@@ -181,12 +143,11 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
   const m = { ...meta, ...pending.meta }
 
   if (stage === 'video') {
-    /** Metadata is corrected, not re-derived: it ends up in the EXIF of every
-        exported frame, so a typo would otherwise mean re-uploading the video. */
-    const text = (key: keyof typeof m, label: string, type = 'text') => (
+    const text = (key: Exclude<keyof MetaEdit, 'mountHeightCm'>, label: string,
+                  type = 'text') => (
       <Row label={label}>
         <input className="insp-control" type={type} disabled={locked}
-               value={(m as Record<string, string>)[key] ?? ''}
+               value={m[key] ?? ''}
                onChange={(e) => edit('meta', key, e.target.value)} />
       </Row>
     )
@@ -194,12 +155,11 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
       <>
         <Group title="source">
           <Row label="File"><Val>{meta?.videoFile ?? walk.id}</Val></Row>
-          {/* read out of the .insv trailer at ingest, not typed */}
+          {/* read from the .insv trailer at ingest */}
           <Row label="Camera"><Val>{meta?.camera || 'unknown'}</Val></Row>
           <Row label="Frame"><Val>{s.source || 'unknown'}</Val></Row>
           <Row label="Lenses">
-            {/* both packings are dual-fisheye: two circles in one 2:1 frame,
-                or one square frame per lens. One circle is half a sphere. */}
+            {/* dual-fisheye: two circles in one 2:1 frame, or one square frame per lens */}
             <Val>{s.lenses === 2 ? 'fisheye ×2' : s.lenses === 1
               ? 'fisheye ×1, incomplete' : 'unknown'}</Val>
           </Row>
@@ -226,8 +186,7 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
           </div>
         )}
         <div className="insp-note">
-          Stamped into the EXIF of every frame in the export, so it travels with
-          the images rather than living only here.
+          Written into the EXIF of every exported frame.
         </div>
       </>
     )
@@ -248,8 +207,7 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
           <Row label="Container"><Val>{p.extract.sdk_image}</Val></Row>
         </Group>
         <div className="insp-note">
-          Changing these re-stitches from the original, which is the whole run
-          again. Re-ingest the video instead.
+          Changing these means re-stitching. Re-ingest the video instead.
         </div>
         <Out>{s.panos} panos at {p.extract.fps}fps</Out>
       </>
@@ -280,13 +238,10 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
           </Row>
         </Group>
         <div className="insp-note">
-          A valve for footage that arrived broken, not a quality knob. It drops a
-          panorama under {gate.dead.toFixed(2)} of the walk's median sharpness, which
-          catches a stretch smeared right through: those frames group with each other,
-          because blur is what they share, and Select would export a smear as the best
-          of them. Nothing else is judged here. This score mixes all four headings and
-          rates a plain wall low whether or not it is sharp, so raising it deletes
-          coverage rather than buying sharpness.
+          Drops panoramas under {gate.dead.toFixed(2)} of the walk's median
+          sharpness. This only catches a stretch smeared right through; the score
+          rates a plain wall low whether or not it is sharp, so raising it costs
+          coverage, not blur.
         </div>
         <Out>{s.sharp} legible of {s.panos} panos</Out>
       </>
@@ -387,12 +342,9 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
           </>
         )}
         <div className="insp-note">
-          Allowing more false merges cuts harder. Nothing is lost by cutting too
-          hard, since every face stays on disk and a lower budget brings them
-          back; the cost of cutting too little is paid in labelling. Moving it
-          only re-reads the pairs already measured, so it is instant; widening
-          the window redraws which pairs count as elsewhere, and sampling more
-          panoramas measures the health check again from the video.
+          A bigger false-merge budget cuts harder. Every face stays on disk, so
+          an over-cut walk can be re-cut. Changing the budget is instant; the
+          window and the sample count re-measure.
         </div>
         <Out>τ {s.calibTau} from {s.farPairs} far pairs</Out>
       </>
@@ -405,8 +357,7 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
       <>
         <Group title="component">
           <Row label="Backbone">
-            {/* the first stage with a real choice. Input size follows the
-                model, since it has to divide by the patch size. */}
+            {/* input size follows the model: it has to divide by the patch size */}
             <select
               className="insp-control" disabled={locked}
               value={emb.model_name}
@@ -429,12 +380,9 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
         </Group>
         <div className="insp-note">
           {swapped
-            ? <>A different backbone scores "the same thing" differently, so
-                Calibrate re-measures and the threshold moves with it. Weights
-                download on first use.</>
-            : <>Cosines are only comparable within one backbone. Calibrate
-                measures this one's scale for identical frames, which is what
-                makes two of them worth comparing.</>}
+            ? <>Cosines differ between backbones, so Calibrate re-measures
+                the threshold. Weights download on first use.</>
+            : <>Cosines are only comparable within one backbone.</>}
         </div>
         <Out>{s.faces} vectors, L2 normalised</Out>
       </>
@@ -451,7 +399,10 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
             <select
               className="insp-control" disabled={locked}
               value={dedup.rule}
-              onChange={(e) => edit('dedup', 'rule', e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === 'fixed' || v === 'calibrated') edit('dedup', 'rule', v)
+              }}
             >
               <option value="fixed">fixed</option>
               <option value="calibrated">calibrated</option>
@@ -460,20 +411,10 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
         </Group>
         <Group title="settings">
           <Row label="τ">
-            {/* under the calibrated rule the walk derives its own value, so
-                the number is shown but not editable */}
-            <input
-              className="insp-control num"
-              type="number" step={0.005} min={0.5} max={0.999}
-              value={dedup.tau}
-              disabled={locked || dedup.rule === 'calibrated'}
-              onChange={(e) => {
-                const v = Number(e.target.value)
-                if (e.target.value !== '' && Number.isFinite(v)) {
-                  edit('dedup', 'tau', v)
-                }
-              }}
-            />
+            {/* under the calibrated rule the walk derives its own tau */}
+            <Num value={dedup.tau} step={0.005} min={0.5} max={0.999}
+                 disabled={locked || dedup.rule === 'calibrated'}
+                 onChange={(v) => edit('dedup', 'tau', v)} />
           </Row>
           <Row label="Scope"><Fixed value="per walk" options={['per walk', 'across walks']} /></Row>
           <Row label="Solo floor">
@@ -483,25 +424,18 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
         </Group>
         <div className="insp-note">
           {dedup.rule === 'calibrated'
-            ? <>The threshold comes from the Calibrate stage, which measured
-                this walk at {s.calibTau}.</>
-            : <>A cosine means nothing on its own. Calibrate measured identical
-                frames on this walk at {s.reference}.</>}
+            ? <>From Calibrate, which measured this walk at {s.calibTau}.</>
+            : <>Calibrate measured identical frames on this walk at {s.reference}.</>}
         </div>
         <div className="insp-note">
-          Dedup runs sharpest first, so a group anchors on its best frame and blur is
-          handled wherever there is a group. A group of one has no such choice, and is
-          the only way an unusable frame reaches a labeller. Solo floor drops those
-          scoring under{' '}
-          {(dedup.solo_floor ?? 0).toFixed(2)} of what their own heading normally scores,
-          which is the comparison that cancels a wall's texture. Set it to 0 to keep
-          every one; each drop costs a view nothing else in the walk resembles.
+          Groups anchor on their sharpest frame. A group of one has no
+          alternative, so the solo floor drops it when it scores under{' '}
+          {(dedup.solo_floor ?? 0).toFixed(2)} of its heading's usual sharpness.
+          0 keeps every one; each drop is a view nothing else in the walk shows.
           {s.solo ? <> This run dropped {s.solo}.</> : null}
         </div>
         {walk.runs.length > 1 && (
           <Group title="what each run gave">
-            {/* the walk on disk only shows the last configuration that ran, so
-                comparing two backbones would otherwise mean keeping notes */}
             <div className="runs">
               {walk.runs.map((r, i) => (
                 <div className={`run${i === 0 ? ' current' : ''}`} key={r.at + i}>
@@ -553,8 +487,7 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
                      onChange={(v) => edit('segment', 'threshold', v)} />
               </Row>
               <div className="insp-classes">
-                {/* one per line: the detector reads them as separate phrases,
-                    and a long prompt makes it merge neighbouring ones */}
+                {/* one per line: a single long prompt makes the detector merge neighbouring phrases */}
                 <Classes value={seg.classes} disabled={locked}
                          onChange={(cs) => edit('segment', 'classes', cs)} />
               </div>
@@ -567,7 +500,7 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
         </Group>
         {s.classMix.length > 0 && (
           <Group title="what the walk is made of">
-            {/* the mean share of each class across the frames that carry one */}
+            {/* mean share per class over the frames that carry it */}
             <div className="runs">
               {s.classMix.map((c) => (
                 <div className="mix" key={c.name}>
@@ -583,13 +516,12 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
         )}
         <div className="insp-note">
           {open
-            ? <>The classes are the prompt, so it finds what you name rather
-                than covering the frame. Anything unnamed stays background.
-                Measured on bare RCC it reads openings well and needs the
-                confidence dropped to find much else.</>
-            : <>A fixed label set over every pixel. ADE20K has the shell of a
-                building and nothing a site is made of, so for rebar or
-                formwork you want the open-vocabulary model.</>}
+            ? <>Finds what you name; anything unnamed stays background. On
+                bare RCC it reads openings well and needs a lower confidence
+                to find much else.</>
+            : <>A fixed label set over every pixel. ADE20K has walls, floors
+                and openings, not rebar or formwork; use the open-vocabulary
+                model for those.</>}
           {' '}Annotation only: it never changes which frames survive.
         </div>
         <Out>{seg.enabled ? `${s.segmented} of ${s.kept} masked` : 'off'}</Out>
@@ -602,8 +534,7 @@ export default function Inspector({ stage, walk, pending, calib, locked, onEdit,
       <>
         <Group title="manual stage">
           <div className="insp-note">
-            The only stage a pipeline hash cannot reproduce. Every decision is
-            logged, and the log leaves in the export as decisions.json.
+            Every decision is logged and exported as decisions.json.
           </div>
         </Group>
         <Group title="decisions">

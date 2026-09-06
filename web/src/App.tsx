@@ -1,441 +1,86 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchCalibration, fetchJobs, fetchWalk, fetchWalks, postDecision,
-         deleteWalk, fetchSegmentation, patchMeta, postRerun, retryWalk,
-         serverSaid, thumb, STAGES, STAGE_OF } from './api'
-import type { Calibration, Decision, Face, Group, Job, Pending, Section,
-              Segmentation, WalkDetail, WalkSummary } from './api'
+import { useCallback, useEffect, useState } from 'react'
+import { deleteWalk, exportZip, fetchJobs, fetchWalks, patchMeta, postRerun,
+         retryWalk, STAGES, STAGE_OF } from './api'
+import type { Decision, Pending, Section, WalkDetail, WalkSummary } from './api'
 import CalibrationModal from './Calibration'
+import { inFlight, message, useJobs, useWalk } from './hooks'
 import Ingest from './Ingest'
+import Inspector from './Inspector'
+import type { Edit } from './Inspector'
+import { rerunLabel } from './labels'
 import Loader from './Loader'
-import Inspector, { backboneLabel } from './Inspector'
-import Pipeline, { rerunLabel } from './Pipeline'
+import Pipeline from './Pipeline'
+import Rail from './Rail'
+import Review from './Review'
 import Segments from './Segments'
 
-// A member that only just cleared the threshold is the one worth a second
-// look: it merged, but barely. The margin is relative to tau, which is per
-// walk now, so a calibrated threshold moves the highlight with it.
-const BORDERLINE_MARGIN = 0.015
+type Sec<S extends Section> = Required<Pending>[S]
 
-/** Fold one edit into the staged set. A value put back to what the walk
-    actually has is not a change, so it un-stages instead of piling up.
-    `saved` is that section as it stands: the walk's params, or its metadata. */
-function stage(pending: Pending, saved: Record<string, any>,
-               section: Section, key: string, value: unknown): Pending {
-  const next: Record<string, any> = { ...pending }
-  const sec = { ...(next[section] ?? {}) }
+// what a section's values are compared against: the saved metadata, or the settings the walk ran with
+function savedOf(walk: WalkDetail, section: Section) {
+  return section === 'meta' ? walk.meta : walk.pipeline[section]
+}
+
+/** Fold one edit into the staged set; a value put back to what is saved un-stages it. */
+function stage<S extends Section, K extends keyof Sec<S>>(
+  pending: Pending, walk: WalkDetail, section: S, key: K, value: Sec<S>[K]): Pending {
+  const saved: { [P in K]?: unknown } | null = savedOf(walk, section)
+  const sec: Sec<S> = Object.assign({}, pending[section])
   // an empty field and a field that was never set are the same thing
   const was = saved?.[key] ?? (typeof value === 'string' ? '' : undefined)
   if (JSON.stringify(was) === JSON.stringify(value)) delete sec[key]
   else sec[key] = value
+  const next = { ...pending }
   if (Object.keys(sec).length === 0) delete next[section]
   else next[section] = sec
-  return next as Pending
-}
-
-const inFlight = (j: Job) => j.status === 'queued' || j.status === 'running'
-
-const tileAt = (grid: HTMLElement | null, i: number) =>
-  [...(grid?.children ?? [])]
-    .filter((el) => el.classList.contains('tile'))[i] as HTMLElement | undefined
-
-/** A decision applied to the group it names.
- *
- * Review used to POST and then refetch the whole walk and the whole walk list
- * after every click. `/api/walks/{id}` rebuilds every group and returns the
- * entire manifest as JSON, and `/api/walks` parses every manifest of every
- * walk, so one keystroke cost two full scans and a repaint of the grid. All
- * three actions change one field of one group, which the client already knows
- * how to compute, so it does. The POST still goes, and a refusal still shows.
- */
-function applied(walk: WalkDetail, d: Decision): WalkDetail {
-  return {
-    ...walk,
-    groups: walk.groups.map((g) => {
-      if (g.anchor.idx !== d.anchorIdx) return g
-      if (d.action === 'drop') return { ...g, dropped: true }
-      if (d.action === 'restore') return { ...g, dropped: false }
-      return { ...g, pick: d.pickIdx ?? g.auto }
-    }),
-  }
-}
-
-function pickFace(g: Group): Face {
-  return g.pick === g.anchor.idx
-    ? g.anchor
-    : g.members.find((m) => m.idx === g.pick) ?? g.anchor
-}
-
-function Funnel({ walk }: { walk: WalkDetail }) {
-  const kept = walk.groups.filter((g) => !g.dropped).length
-  const dropped = walk.groups.length - kept
-  const absorbed = walk.faces - walk.groups.length
-  return (
-    <div className="funnel">
-      <span><span className="n">{walk.faces}</span> <span className="label">faces</span></span>
-      <span className="arrow">→</span>
-      <span><span className="n">{absorbed}</span> <span className="label">absorbed</span></span>
-      {dropped > 0 && (
-        <>
-          <span className="arrow">→</span>
-          <span><span className="n drop-n">{dropped}</span> <span className="label">dropped</span></span>
-        </>
-      )}
-      <span className="arrow">→</span>
-      <span><span className="n kept-n">{kept}</span> <span className="label">kept</span></span>
-    </div>
-  )
-}
-
-function MetaLine({ walk }: { walk: WalkDetail }) {
-  const m = walk.meta
-  if (!m) return null
-  const bits = [
-    m.site && `site ${m.site}`,
-    m.building && `building ${m.building}`,
-    m.stage,
-    m.operator,
-    m.mountHeightCm != null && `${m.mountHeightCm} cm`,
-    m.shotDate,
-  ].filter(Boolean)
-  if (bits.length === 0) return null
-  return <div className="meta-line">{bits.join(' · ')}</div>
-}
-
-/** What produced these groups. Reviewing them is judging a threshold, so the
-    threshold and the backbone that scored against it belong on the page. */
-function RunLine({ walk }: { walk: WalkDetail }) {
-  const { dedup, embed } = walk.pipeline
-  return (
-    <div className="run-line">
-      τ {dedup.tau}{dedup.rule === 'calibrated' ? ' calibrated' : ''}
-      <span className="sep">·</span>
-      {backboneLabel(embed.model_name)}
-    </div>
-  )
-}
-
-function GroupRow({ group, tau, onDecision }: {
-  group: Group
-  tau: number
-  onDecision: (d: Decision) => void
-}) {
-  const { anchor, members, pick, dropped } = group
-  const candidates = [anchor, ...members]
-  const best = Math.max(...candidates.map((f) => f.sharpness)) || 1
-  const shown = candidates.find((f) => f.idx === pick) ?? anchor
-  return (
-    <div className={`group-row${dropped ? ' dropped' : ''}`}>
-      <div className="group-head">
-        {/* The tile shows the frame this group exports, which is the anchor
-            unless a human moved it. Naming a different frame here than the
-            tile that opened it reads as a bug rather than as two facts. */}
-        <span>
-          y{anchor.yaw}, from t={anchor.tSec.toFixed(1)}s
-          {members.length > 0 ? <>
-            {`, ${members.length + 1} candidates, exporting `}
-            <b>t={shown.tSec.toFixed(1)}s</b>
-            {shown.idx === group.auto ? ' as the sharpest' : ' by your override'}
-          </> : ', no duplicates absorbed'}
-        </span>
-        <button
-          className={`drop-btn${dropped ? ' restore' : ''}`}
-          onClick={() =>
-            onDecision({ anchorIdx: anchor.idx, action: dropped ? 'restore' : 'drop' })}
-        >
-          {dropped ? 'Restore Group' : 'Drop Group'}
-        </button>
-      </div>
-      <div className="strip">
-        {candidates.map((f, n) => {
-          const isPick = f.idx === pick && !dropped
-          // sharpness only means anything next to its siblings: the absolute
-          // number swings with how much texture is in view
-          const rel = f.sharpness / best
-          return (
-            <button
-              key={f.idx}
-              className={`member${isPick ? ' is-pick' : ''}`}
-              disabled={dropped}
-              onClick={() => {
-                if (!isPick) onDecision({ anchorIdx: anchor.idx, action: 'pick', pickIdx: f.idx })
-              }}
-              title={`sharpness ${f.sharpness.toFixed(0)}`}
-            >
-              {n < 9 && <span className="key">{n + 1}</span>}
-              <img src={thumb(f.url)} alt={`t=${f.tSec.toFixed(1)}s y${f.yaw}`}
-                   loading="lazy" />
-              {candidates.length > 1 && (
-                <span className="sharp" aria-hidden>
-                  <span style={{ width: `${Math.round(100 * rel)}%` }} />
-                </span>
-              )}
-              <span
-                className={`cos${isPick ? ' pick-label' : ''}${
-                  !isPick && f.cosine !== null
-                    && f.cosine < tau + BORDERLINE_MARGIN ? ' borderline' : ''
-                }`}
-              >
-                {isPick ? (f.idx === group.auto ? 'sharpest' : 'override')
-                  : f.cosine === null ? `t=${f.tSec.toFixed(1)}s` : f.cosine.toFixed(3)}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function KeptGrid({ walk, onDecision }: {
-  walk: WalkDetail
-  onDecision: (d: Decision) => void
-}) {
-  const [open, setOpen] = useState<number | null>(null)
-  const [focus, setFocus] = useState(0)
-  const [cols, setCols] = useState(1)
-  const gridRef = useRef<HTMLDivElement>(null)
-  useEffect(() => { setOpen(null); setFocus(0) }, [walk.id])
-
-  const groups = walk.groups
-
-  // How many tiles fit across, read from the grid's own resolved template.
-  // The expanded panel goes after the row it belongs to rather than straight
-  // after its tile, so opening a group does not leave the row half empty.
-  useEffect(() => {
-    const el = gridRef.current
-    if (!el) return
-    const measure = () => setCols(Math.max(1, getComputedStyle(el)
-      .gridTemplateColumns.split(' ').filter(Boolean).length))
-    measure()
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-  }, [])
-
-  // keyboard review: arrows move, enter opens, x drops, 1-9 swap the pick
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return
-      const t = e.target as HTMLElement | null
-      if (t?.closest?.('input, textarea, select')) return
-      if (!groups.length) return
-      const g = groups[focus]
-      const move = (d: number) => {
-        e.preventDefault()
-        setFocus((f) => Math.min(groups.length - 1, Math.max(0, f + d)))
-      }
-      // legacy names (Right/Left/.../Return) for automation layers
-      const key = {Right: 'ArrowRight', Left: 'ArrowLeft', Down: 'ArrowDown',
-                   Up: 'ArrowUp', Return: 'Enter'}[e.key] ?? e.key
-      if (key === 'ArrowRight') move(1)
-      else if (key === 'ArrowLeft') move(-1)
-      else if (key === 'ArrowDown') move(cols)
-      else if (key === 'ArrowUp') move(-cols)
-      else if (key === 'Enter' || key === ' ') {
-        e.preventDefault()
-        setOpen((o) => (o === g.anchor.idx ? null : g.anchor.idx))
-      } else if (key === 'Escape') setOpen(null)
-      else if (e.key === 'x') {
-        onDecision({ anchorIdx: g.anchor.idx, action: g.dropped ? 'restore' : 'drop' })
-      } else if (/^[1-9]$/.test(e.key) && open === g.anchor.idx && !g.dropped) {
-        const target = [g.anchor, ...g.members][Number(e.key) - 1]
-        if (target && target.idx !== g.pick) {
-          onDecision({ anchorIdx: g.anchor.idx, action: 'pick', pickIdx: target.idx })
-        }
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [groups, focus, open, cols, onDecision])
-
-  // Move the browser's focus, not just a highlight of our own.
-  //
-  // These tiles are real buttons, so the browser has its own idea of which one
-  // is focused, and this used to track a separate index that never agreed with
-  // it: tabbing to a tile and pressing Enter opened whichever group the stale
-  // index named, and arrowing around drew two outlines at once. Driving DOM
-  // focus makes them the same thing, and the roving tabindex below keeps six
-  // hundred tiles out of the tab order.
-  useEffect(() => {
-    const tile = tileAt(gridRef.current, focus)
-    if (!tile || tile === document.activeElement) return
-    // only steal focus if it is already in the grid, so arrowing does not yank
-    // the caret out of a field somewhere else on the page
-    const inGrid = gridRef.current?.contains(document.activeElement)
-    if (inGrid) tile.focus({ preventScroll: true })
-    tile.scrollIntoView({ block: 'nearest' })
-  }, [focus])
-
-  // the last tile on the same visual row as the open one
-  const openAt = open === null ? -1 : groups.findIndex((g) => g.anchor.idx === open)
-  const panelAfter = openAt < 0 ? -1
-    : Math.min(groups.length - 1, Math.floor(openAt / cols) * cols + cols - 1)
-
-  return (
-    <>
-      <div className="grid" ref={gridRef}>
-        {walk.groups.map((g, i) => {
-          const f = pickFace(g)
-          const isOpen = open === g.anchor.idx
-          // a human disagreeing with the pipeline, not with the anchor: the
-          // auto pick is already usually a member rather than the anchor
-          const overridden = g.pick !== g.auto
-          const tile = (
-            <button
-              key={g.anchor.idx}
-              className={`tile kept${isOpen ? ' open' : ''}${g.dropped ? ' dropped' : ''}`}
-              style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}
-              onClick={() => { setFocus(i); setOpen(isOpen ? null : g.anchor.idx) }}
-              onFocus={() => setFocus(i)}
-              // one stop for the whole grid: tabbing into six hundred buttons
-              // and out again is not navigation
-              tabIndex={i === focus ? 0 : -1}
-              title={`pano ${f.panoIdx}, yaw ${f.yaw}`}
-            >
-              <img src={thumb(f.url)} alt={`pick t=${f.tSec}s`} loading="lazy" />
-              {g.dropped && <span className="badge">dropped</span>}
-              {!g.dropped && overridden && <span className="badge override">swapped</span>}
-              {!g.dropped && !overridden && g.members.length > 0 && (
-                <span className="badge">+{g.members.length}</span>
-              )}
-              <span className="meta">
-                <span>t={f.tSec.toFixed(1)}s</span>
-                <span>y{f.yaw}</span>
-              </span>
-            </button>
-          )
-          return i === panelAfter
-            ? [tile, <GroupRow key={`row-${open}`} group={groups[openAt]}
-                                tau={walk.pipeline.dedup.tau}
-                                onDecision={onDecision} />]
-            : tile
-        })}
-      </div>
-    </>
-  )
-}
-
-/** Same row as a finished walk: the name, then a dot instead of the counts. */
-// A run in flight. Errored jobs are not shown here: the walk's own row carries
-// the failure and the context menu that can act on it.
-// traceback.format_exc ends in a newline, so .pop() on the untrimmed string
-// returns '' and the tooltip read "Failed: " with nothing after it.
-function JobItem({ job, active, onClick }: {
-  job: Job
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      className={`walk-item${active ? ' active' : ''}`}
-      onClick={onClick}
-      title={job.status === 'error'
-        ? `Failed: ${job.error.trim().split('\n').pop()}`
-        : job.stage || job.status}
-    >
-      <span className="walk-id">{job.walkId}</span>
-      <span className={`job-dot ${job.status}`} />
-    </button>
-  )
+  return next
 }
 
 export default function App() {
   const [walks, setWalks] = useState<WalkSummary[] | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
-  const [walk, setWalk] = useState<WalkDetail | null>(null)
-  const [jobs, setJobs] = useState<Job[]>([])
   const [ingesting, setIngesting] = useState(false)
   const [view, setView] = useState<'pipeline' | 'review' | 'masks'>('pipeline')
-  const [seg, setSeg] = useState<Segmentation | null>(null)
   const [inspect, setInspect] = useState<string | null>(null)
-  // settings edited but not yet applied, Railway style: the canvas marks what
-  // they would re-run and nothing happens until Apply
+  // edits not yet applied; nothing runs until Apply
   const [pending, setPending] = useState<Pending>({})
   const [applying, setApplying] = useState(false)
   const [refused, setRefused] = useState<string | null>(null)
-  const [unreachable, setUnreachable] = useState<string | null>(null)
   // right-click on a walk: {id, x, y}, and `armed` once Delete is chosen
   const [menu, setMenu] = useState<
     { walk: WalkSummary; x: number; y: number; armed: boolean } | null>(null)
-  const [calib, setCalib] = useState<Calibration | null>(null)
   const [showCalib, setShowCalib] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // the server stopped answering. Distinct from `error`, which is something
-  // a request said: this is nobody saying anything, and it clears itself.
-  const [offline, setOffline] = useState(false)
   const [exporting, setExporting] = useState(false)
 
-  const exportUrl = selected
-    ? `/api/walks/${encodeURIComponent(selected)}/export` : ''
+  const { walk, setWalk, calib, seg, unreachable, reload, decide } =
+    useWalk(selected, setWalks, setError)
+  const { jobs, setJobs, offline } = useJobs(
+    selected,
+    (id) => { reload(id).catch(() => {}) },
+    () => fetchWalks().then(setWalks))
+
   const job = jobs.find((j) => j.walkId === selected) ?? null
-  // An errored job is finished, not in flight. Treating it as running hid the
-  // failure notice, locked the inspector, kept Review and Export away, and
-  // filtered the walk's own row out of the rail, which is where the context
-  // menu carrying Retry and Delete lives. The one recovery path in the app
-  // disappeared exactly when it was needed.
+  // an errored job is finished, not in flight
   const running = job !== null && inFlight(job)
   const activeJobs = jobs.filter(inFlight)
 
-  const refreshWalks = useCallback(
-    () => fetchWalks().then((ws) => { setWalks(ws); setOffline(false) })
-      .catch(() => setOffline(true)),
-    [])
-
   useEffect(() => {
-    // jobs too: a run started in another tab (or before a reload) should still
-    // show up in the rail and keep its canvas live
-    fetchJobs().then(setJobs).catch(() => {})
     fetchWalks()
       .then((ws) => {
         setWalks(ws)
         if (ws.length > 0) setSelected(ws[0].id)
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(message(e)))
   }, [])
 
-  // Which walk the in-flight loads belong to. Click walk A then walk B fast
-  // enough and A's slower response lands after B's, putting A's groups under
-  // B's name — and group indices are small per-walk integers, so a decision
-  // clicked on that grid posts A's anchorIdx against B and the server applies
-  // it to whichever of B's groups happens to wear that number. Every async
-  // setter that names a walk checks this ref before landing.
-  const selectedRef = useRef<string | null>(null)
-
   useEffect(() => {
-    selectedRef.current = selected
     if (!selected) return
-    const id = selected
-    setWalk(null)
     setView('pipeline')
     setInspect(null)
     setPending({})
     setRefused(null)
-    // a queued or running walk has no manifest yet: the canvas runs off the
-    // job until it lands, so a 404 here is expected rather than an error
-    setCalib(null)
     setShowCalib(false)
-    setUnreachable(null)
-    setSeg(null)
-    // a walk that will not load is not a walk that is still loading: without
-    // this the canvas sits on "Loading…" forever and never says why
-    fetchWalk(id)
-      .then((w) => {
-        if (selectedRef.current !== id) return
-        setWalk(w)
-        setUnreachable(null)
-      })
-      .catch((e) => {
-        if (selectedRef.current !== id) return
-        setWalk(null)
-        setUnreachable(e instanceof Error ? e.message : String(e))
-      })
-    // measured on every run, so only walks made before it exists lack a record
-    fetchCalibration(id)
-      .then((c) => { if (selectedRef.current === id) setCalib(c) })
-      .catch(() => { if (selectedRef.current === id) setCalib(null) })
-    // 404s until the Segment stage has been turned on for this walk
-    fetchSegmentation(id)
-      .then((s) => { if (selectedRef.current === id) setSeg(s) })
-      .catch(() => { if (selectedRef.current === id) setSeg(null) })
   }, [selected])
 
   useEffect(() => {
@@ -453,112 +98,49 @@ export default function App() {
     }
   }, [menu])
 
-  // calibration and segmentation depend on nothing the first two return, so
-  // they go out together rather than in a three-deep waterfall
-  const reload = useCallback((id: string) =>
-    Promise.all([
-      fetchWalk(id),
-      fetchWalks(),
-      fetchCalibration(id).catch(() => null),
-      fetchSegmentation(id).catch(() => null),
-    ]).then(([w, ws, c, s]) => {
-      setWalks(ws)
-      if (selectedRef.current !== id) return
-      setWalk(w)
-      setCalib(c)
-      setSeg(s)
-    }), [])
-
-  // Poll only while a run is in flight. It used to tick forever, and because
-  // "nothing is active" was the branch that also refreshed the walk list, an
-  // idle tab hit /api/walks every eight seconds for as long as it was open:
-  // that endpoint parses every manifest of every walk, so a tab left open all
-  // day was thousands of full scans to learn nothing. A run started in another
-  // tab is caught on focus instead, which is when you would look.
-  const active = jobs.some(inFlight)
-  const watching = useRef<number | null>(null)
-
-  const pollJobs = useCallback(() => fetchJobs().then((js) => {
-    setJobs(js)
-    setOffline(false)
-    const mine = js.find((j) => j.walkId === selected)
-    // a job of ours leaving flight is the moment the frames on disk changed,
-    // whether it was an ingest, a settings change, or a failure
-    if (mine && selected && inFlight(mine)) watching.current = mine.id
-    else if (mine && !inFlight(mine) && selected
-             && watching.current === mine.id) {
-      watching.current = null
-      reload(selected).catch(() => {})
-      return
-    }
-    if (!js.some(inFlight)) refreshWalks()
-  }).catch(() => setOffline(true)), [selected, reload, refreshWalks])
-
-  useEffect(() => {
-    if (!active) return
-    const t = setInterval(pollJobs, 2000)
-    return () => clearInterval(t)
-  }, [active, pollJobs])
-
-  // coming back to the tab is the one moment worth a free check
-  useEffect(() => {
-    const onFocus = () => { pollJobs() }
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
-  }, [pollJobs])
-
-  // The inspector is a fixed panel over the right of the canvas, so the canvas
-  // has to give up the width or the pipeline centres under it. It opens during
-  // a run too: watching a stage is the moment you most want to see what it is
-  // set to. Editing is what a run rules out, and that is the panel's business.
+  // the inspector overlays the right of the canvas, so the canvas gives up the width
   const inspecting = view === 'pipeline' && !ingesting && !!inspect && !!walk
 
   const edited = Object.values(pending).reduce(
     (n, sec) => n + Object.keys(sec ?? {}).length, 0)
   const dirtyFrom = STAGES.find((s) => Object.keys(pending).some(
     (k) => STAGE_OF[k] === s)) ?? null
-  // metadata is staged the same way but re-runs nothing, so the pill says what
-  // Apply would do rather than which stages it would cost
+  // metadata edits re-run nothing
   const { meta: metaEdit, ...settings } = pending
   const willRun = Object.keys(settings).length > 0
 
-  const onEdit = useCallback((section: Section, key: string, value: unknown) => {
+  const onEdit: Edit = (section, key, value) => {
     if (!walk) return
-    const saved = section === 'meta'
-      ? (walk.meta ?? {}) : (walk.pipeline as Record<string, any>)[section]
-    setPending((prev) => stage(prev, saved, section, key, value))
-  }, [walk])
+    setPending((prev) => stage(prev, walk, section, key, value))
+  }
 
-  const apply = useCallback(() => {
+  const apply = () => {
     if (!selected) return
     setApplying(true)
     setRefused(null)
-    // metadata first: it is a row update either way, and doing it before a
-    // re-run means the reload afterwards already carries it
+    // metadata first, so the reload after a re-run already carries it
     Promise.resolve(metaEdit && patchMeta(selected, metaEdit))
       .then(() => willRun ? postRerun(selected, settings) : null)
       .then((res) => {
         setPending({})
-        // a re-select is already done; anything heavier is now a job, and the
-        // canvas follows it stage by stage until it lands
+        // no job id means the change applied immediately
         if (res?.id != null) return fetchJobs().then(setJobs)
         return reload(selected)
       })
-      // a refused change keeps the edits staged: the pill says why and the
-      // walk on screen is still the one on disk
-      .catch((e) => setRefused(e instanceof Error ? e.message : String(e)))
+      // a refused change keeps the edits staged
+      .catch((e) => setRefused(message(e)))
       .finally(() => setApplying(false))
-  }, [selected, metaEdit, settings, willRun, reload])
+  }
 
-  const onRetry = useCallback((id: string) => {
+  const onRetry = (id: string) => {
     setMenu(null)
     setError(null)
     retryWalk(id)
       .then(() => fetchJobs().then(setJobs))
-      .catch((e) => setError(String(e)))
-  }, [])
+      .catch((e) => setError(message(e)))
+  }
 
-  const onDelete = useCallback((id: string) => {
+  const onDelete = (id: string) => {
     setMenu(null)
     setError(null)
     deleteWalk(id)
@@ -569,52 +151,39 @@ export default function App() {
         setSelected(ws.length ? ws[0].id : null)
         if (!ws.length) setWalk(null)
       })
-      .catch((e) => setError(String(e)))
-  }, [])
+      .catch((e) => setError(message(e)))
+  }
 
-  const onExport = useCallback(() => {
+  const onExport = () => {
     if (!selected) return
     setError(null)
     setExporting(true)
-    fetch(exportUrl)
-      .then(async (res) => {
-        if (!res.ok) throw new Error(serverSaid(await res.text().catch(() => ''))
-          || `${res.status} ${res.statusText}`)
-        return res.blob()
-      })
+    exportZip(selected)
       .then((blob) => {
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
         a.download = `${selected}.zip`
+        document.body.appendChild(a)
         a.click()
-        URL.revokeObjectURL(url)
+        // revoking in the same tick cancels the download in some browsers
+        setTimeout(() => { URL.revokeObjectURL(url); a.remove() }, 0)
       })
-      .catch((e) => setError(`Export failed: ${e.message}`))
+      .catch((e) => setError(`Export failed: ${message(e)}`))
       .finally(() => setExporting(false))
-  }, [selected, exportUrl])
+  }
 
+  // stable: a dep of the review grid's key handler
   const onDecision = useCallback((d: Decision) => {
-    if (!selected) return
     setError(null)
-    setWalk((w) => (w ? applied(w, d) : w))
-    postDecision(selected, d)
-      // the server disagreeing means the local guess is wrong, so take its
-      // answer rather than leaving the grid showing something that did not
-      // happen. Only on failure; the happy path already matches.
-      .catch((e) => {
-        setError(String(e))
-        fetchWalk(selected)
-          .then((w) => { if (selectedRef.current === selected) setWalk(w) })
-          .catch(() => {})
-      })
-  }, [selected])
+    decide(d).catch((e) => setError(message(e)))
+  }, [decide])
+
+  const selectWalk = (id: string) => { setIngesting(false); setSelected(id) }
 
   return (
     <div className="frame">
       <header className="topbar">
-        {/* the poll stopped answering. Without this the app freezes in its
-            last state and the running dot keeps pulsing at a dead server. */}
         {offline && <div className="offline">server not responding</div>}
         <div className="crumb">
           <span className="crumb-dim">accio</span>
@@ -648,11 +217,7 @@ export default function App() {
                   Masks
                 </button>
               )}
-              {/* A bare download link gave no sign it had started, so an
-                  export that reads and EXIF-stamps every kept frame looked
-                  like a dead button and got clicked again, queueing another
-                  zip. Fetching it means the wait is visible and a refusal
-                  arrives as words rather than a downloaded error page. */}
+              {/* fetched rather than linked, so the wait is visible and a refusal arrives as text */}
               <button className="top-btn" disabled={exporting}
                       onClick={onExport}>
                 {exporting ? 'Exporting…' : 'Export'}
@@ -662,55 +227,11 @@ export default function App() {
         </div>
       </header>
       <div className="app">
-      <nav className="rail">
-        <div className="rail-label">
-          <span>Walks</span>
-          <span className="rail-count">{walks?.length ?? 0}</span>
-          <button
-            className={`icon-btn${ingesting ? ' active' : ''}`}
-            onClick={() => setIngesting(true)}
-            title="New Walk"
-            aria-label="New Walk"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </button>
-        </div>
-        {activeJobs.map((j) => (
-          <JobItem key={j.id} job={j} active={j.walkId === selected}
-                   onClick={() => { setIngesting(false); setSelected(j.walkId) }} />
-        ))}
-        {/* a walk being re-run is already in the rail above, as a job */}
-        {walks?.filter((w) => !activeJobs.some((j) => j.walkId === w.id)).map((w) => (
-          <button
-            key={w.id}
-            className={`walk-item${!ingesting && w.id === selected ? ' active' : ''}${
-              menu?.walk.id === w.id ? ' menued' : ''}`}
-            onClick={() => { setIngesting(false); setSelected(w.id) }}
-            title={w.error ? `Failed at ${w.error.stage}: ${w.error.message}`
-              : w.ready ? undefined : 'This run never finished'}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              setMenu({ walk: w, x: e.clientX, y: e.clientY, armed: false })
-            }}
-          >
-            <span className="walk-id">{w.id}</span>
-            {/* frames if it has any, and a mark if its last run broke: a walk
-                can have both, when a re-run failed over a good earlier one */}
-            {w.ready && (
-              <span className="walk-stats">
-                <span className="kept-n">{w.kept}</span>/{w.faces}
-              </span>
-            )}
-            {(!w.ready || w.error) && <span className="job-dot error" />}
-          </button>
-        ))}
-      </nav>
+      <Rail walks={walks} activeJobs={activeJobs} selected={selected}
+            ingesting={ingesting} menued={menu?.walk.id ?? null}
+            onSelect={selectWalk} onNew={() => setIngesting(true)}
+            onMenu={(w, x, y) => setMenu({ walk: w, x, y, armed: false })} />
       {menu && (
-        // right-click on a walk. Delete arms in place rather than opening a
-        // dialog, so the thing being deleted stays under the cursor.
         <div
           className="ctx"
           style={{ left: menu.x, top: menu.y }}
@@ -747,8 +268,7 @@ export default function App() {
       <main className={`main${ingesting ? ' center' : ''}${
         inspecting ? ' inspected' : ''}${
         view === 'pipeline' && !ingesting ? ' pipeline' : ''}`}>
-        {/* Zed's dotted backdrop, their markup rather than a CSS gradient:
-            an 8 px pattern with an r=0.75 circle in blue-300 at 60%. */}
+        {/* Zed's dotted backdrop: 8 px pattern, r=0.75 circle */}
         <svg className="dots">
           <defs>
             <pattern id="dot" width="8" height="8" patternUnits="userSpaceOnUse">
@@ -757,9 +277,6 @@ export default function App() {
           </defs>
           <rect width="100%" height="100%" fill="url(#dot)" />
         </svg>
-        {/* A failed request used to replace the whole work area and stay there
-            until the browser was reloaded, losing your place in the grid. It
-            is one request that failed, so it says so and gets out of the way. */}
         {error && (
           <div className="banner">
             <span>{error}</span>
@@ -819,36 +336,13 @@ export default function App() {
           <Segments seg={seg} />
         )}
         {!ingesting && walk && view === 'review' && (
-          <>
-            <header className="walk-header">
-              <div className="header-row">
-                <Funnel walk={walk} />
-                <RunLine walk={walk} />
-              </div>
-              <MetaLine walk={walk} />
-              {/* A full keymap that nothing mentions is not a keyboard flow.
-                  Reviewing by mouse is one to two clicks a group, so several
-                  hundred a walk, which is the thing the keys exist to avoid. */}
-              <div className="keys-hint">
-                <kbd>←</kbd><kbd>→</kbd> move
-                <span className="sep">·</span>
-                <kbd>enter</kbd> open
-                <span className="sep">·</span>
-                <kbd>x</kbd> drop
-                <span className="sep">·</span>
-                <kbd>1</kbd>–<kbd>9</kbd> pick
-              </div>
-            </header>
-            <KeptGrid walk={walk} onDecision={onDecision} />
-          </>
+          <Review walk={walk} onDecision={onDecision} />
         )}
         {!ingesting && !walk && !running && selected && (
           <Loader label={unreachable ? 'Could not open this walk' : 'Opening'}
                   sub={selected} error={unreachable} />
         )}
-        {/* walks is null until the first list lands. Without this the app
-            opens to an empty dotted field saying nothing, while the rail
-            reads "Walks 0" as though that were the answer. */}
+        {/* walks is null until the first list lands */}
         {!ingesting && walks === null && <Loader label="Loading walks" />}
         {!ingesting && !selected && walks?.length === 0 && (
           <div className="empty">No walks yet. Add one with the + to the left.</div>

@@ -1,36 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { thumb } from './api'
 import type { Segmentation, SegFrame } from './api'
+import { classColour } from './labels'
 
-// What the segmenter saw, drawn over the frames it saw it in.
-//
-// The mask on disk is class indices, so the colour is chosen here rather than
-// baked in: the file stays the label. Outlines rather than a filled overlay,
-// because judging a mask means looking at whether its boundary follows the
-// thing, and a wash over the whole frame hides exactly that.
-
-/** A stable colour per class name. Deterministic so a class keeps its colour
-    between frames and between walks, which is what makes the grid readable. */
-export function classColour(name: string): [number, number, number] {
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0
-  const hue = Math.abs(h) % 360
-  // fixed saturation and lightness: the hue carries the identity, and equal
-  // weight keeps one class from shouting over another
-  const f = (n: number) => {
-    const k = (n + hue / 30) % 12
-    const c = 0.58 * Math.min(1, Math.max(-1, Math.min(k - 3, 9 - k)))
-    return Math.round(255 * (0.58 - c * 0.42))
-  }
-  return [f(0), f(8), f(4)]
-}
+// masks drawn over their frames. The mask on disk is class indices; colours
+// are chosen here.
 
 const css = (c: [number, number, number], a = 1) =>
   `rgba(${c[0]},${c[1]},${c[2]},${a})`
 
-/** Draw the frame, then the class boundaries over it.
-    A pixel is a boundary when a neighbour belongs to another class, which on a
-    label image is all a contour is. */
+/** Draw the frame, then the class boundaries (pixels with a differently labelled neighbour). */
 function paint(canvas: HTMLCanvasElement, frame: HTMLImageElement,
                mask: HTMLImageElement, labels: string[], size: number,
                fill: boolean) {
@@ -40,8 +19,7 @@ function paint(canvas: HTMLCanvasElement, frame: HTMLImageElement,
   ctx.imageSmoothingEnabled = true
   ctx.drawImage(frame, 0, 0, size, size)
 
-  // nearest neighbour for the mask: smoothing a label image averages class
-  // indices together and invents classes that were never predicted
+  // nearest neighbour: smoothing a label image averages class indices into classes never predicted
   const off = document.createElement('canvas')
   off.width = off.height = size
   const octx = off.getContext('2d', { willReadFrequently: true })!
@@ -52,9 +30,7 @@ function paint(canvas: HTMLCanvasElement, frame: HTMLImageElement,
   const out = ctx.getImageData(0, 0, size, size)
   const px = out.data
   const at = (x: number, y: number) => m[(y * size + x) * 4]
-  // one colour per class index, built once. classColour hashes the class name,
-  // and calling it inside the loop hashed a string per pixel: at 512 square
-  // with the areas shaded that is a quarter of a million string hashes a tile.
+  // classColour hashes a string; do not call it per pixel
   const palette: [number, number, number][] = []
   const colourOf = (c: number) =>
     palette[c] ?? (palette[c] = classColour(labels[c] ?? String(c)))
@@ -85,13 +61,7 @@ function load(src: string): Promise<HTMLImageElement> {
   })
 }
 
-/** Draw when it comes into view, not on mount.
- *
- * Every tile used to load two images and run a per-pixel loop the moment the
- * page rendered, so a walk of a few hundred kept frames fired that many image
- * pairs and canvases in one tick and locked the tab. It also painted twice,
- * because `labels` resolves in an effect and arrives after the first pass, so
- * the first paint used index-derived colours that did not match the legend. */
+/** Paints when scrolled near, not on mount: a few hundred tiles painting in one tick locks the tab. */
 function Overlay({ frame, labels, size, fill }: {
   frame: SegFrame
   labels: string[]
@@ -113,13 +83,13 @@ function Overlay({ frame, labels, size, fill }: {
   }, [near])
 
   useEffect(() => {
-    // nothing to draw until the labels are known: painting first would use a
-    // different colour per class than the chips above claim
+    // wait for the labels, or the colours disagree with the legend
     if (!near || !labels.length) return
     let live = true
-    // the tiles are 220 px, so the 1024 original is fifty times the pixels
-    Promise.all([load(size <= 256 ? thumb(frame.url) : frame.url),
-                 load(frame.mask)])
+    // the 1024 original is about fifty times the pixels of a 220 px tile
+    const small = size <= 256
+    Promise.all([load(small ? thumb(frame.url) : frame.url),
+                 load(small ? thumb(frame.mask) : frame.mask)])
       .then(([img, mask]) => {
         if (live && ref.current) paint(ref.current, img, mask, labels, size, fill)
       })
@@ -130,33 +100,25 @@ function Overlay({ frame, labels, size, fill }: {
   return (
     <span className="overlay">
       <canvas ref={ref} width={size} height={size} />
-      {/* a 404 mask used to leave a blank white square indistinguishable from
-          one that had not painted yet */}
+      {/* a failed load would otherwise look like a tile not yet painted */}
       {failed && <span className="overlay-bad" title="this frame or its mask
                        could not be loaded" />}
     </span>
   )
 }
 
-/** Which mask index is which class.
- *
- * The run records it, because the mask is indices and only the model knows
- * what they mean. There used to be a fallback that ranked indices by pixel
- * count and matched them against each frame's class list, for masks written
- * before the table existed. It was derived from frame 0 and applied to the
- * whole walk, so any class absent from the opening frame went unnamed
- * everywhere and rendered in a colour the legend disagreed with. Re-running
- * segment is free and produces the table, so the guess is gone. */
-function useLabels(seg: Segmentation): string[] {
+/** Class name per mask index, from the table the run records. */
+function labelTable(labels: Segmentation['labels']): string[] {
   const out: string[] = []
-  for (const [i, name] of Object.entries(seg.labels ?? {})) out[Number(i)] = name
+  for (const [i, name] of Object.entries(labels ?? {})) out[Number(i)] = name
   return out
 }
 
 export default function Segments({ seg }: { seg: Segmentation }) {
   const [open, setOpen] = useState<string | null>(null)
   const [fill, setFill] = useState(false)
-  const labels = useLabels(seg)
+  // a dep of every Overlay's paint effect, so it must keep its identity across renders
+  const labels = useMemo(() => labelTable(seg.labels), [seg.labels])
   const shown = seg.frames.find((f) => f.face === open)
 
   return (

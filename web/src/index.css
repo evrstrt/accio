@@ -1,10 +1,3 @@
-/* Zed-style chrome, the same theme as the ciq-demo free-roam viewer so the
-   tools read as one product: flat light panels on the #f1f0ee surface,
-   hairline #dadde2 borders, 4 px radii, -0.35px tracking, IBM Plex Sans with
-   ui-monospace for small values, subtle hover wash, press-down micro
-   animation, accent blue hsl(219 93% 35%). The frames themselves are
-   content, not chrome: they keep their own colours. */
-
 :root {
   --z-border: #dadde2;
   --z-bg: #fcfcfd;
@@ -12,7 +5,7 @@
   --z-text: oklch(0.358979 0.0154914 262.882);
   --z-icon: #3f4650;
   --z-muted: #6e7681;
-  --z-wire: #969ca5;   /* canvas links: grey, a step lighter than muted text */
+  --z-wire: #969ca5;
   --z-blue: hsl(219, 93%, 35%);
   --z-blue-soft: hsl(219, 93%, 95%);
   --z-blue-border: hsl(219, 93%, 35%, 0.35);
@@ -51,12 +44,8 @@ button {
   cursor: pointer;
 }
 
-/* --- frame -------------------------------------------------------------- */
-
 .frame { min-height: 100vh; }
 
-/* Zed's page chrome: a full-width strip flush with the top edge, context on
-   the left, actions on the right, one hairline along the bottom. */
 .topbar {
   position: fixed;
   top: 0;
@@ -72,8 +61,6 @@ button {
   border-bottom: 1px solid rgba(206, 209, 214, 0.6);
 }
 
-/* Zed's buttons: 24 px, transparent until hover, blue-soft when active.
-   .top-btn is the same control with an auto width (their Import / Export). */
 .icon-btn, .top-btn {
   display: flex;
   align-items: center;
@@ -110,7 +97,6 @@ button {
   outline-offset: 1px;
 }
 
-/* Zed's `New Theme / One Light`: context dimmed, value at full contrast */
 .crumb {
   display: flex;
   align-items: center;
@@ -135,15 +121,6 @@ button {
 .crumb-link:hover { opacity: 1; }
 
 .top-actions { display: flex; align-items: center; gap: 2px; }
-
-.z-divider {
-  width: 1px;
-  height: 20px;
-  margin: 0 8px;
-  background: rgba(218, 221, 226, 0.6);
-}
-
-/* --- sidebar ------------------------------------------------------------ */
 
 .app { min-height: 100vh; }
 
@@ -217,35 +194,24 @@ button {
 .kept-n { color: var(--z-green); }
 .walk-item.active .kept-n { color: inherit; }
 
-/* --- canvas ------------------------------------------------------------- */
-
-/* The work area: Zed's dotted backdrop, drawn with their own SVG pattern
-   (8 px pitch, r=0.75 circle in blue-300 at 60%). A radial-gradient with a
-   hard stop antialiases differently, and at 1.5 px across that is most of
-   the dot. */
+/* dots are an SVG pattern: a hard-stop radial-gradient antialiases away most of a 1.5 px dot */
 .main {
   position: relative;
-  isolation: isolate;   /* so the z-index -1 dots land above this background */
+  isolation: isolate;   /* the z-index -1 dots must land above this background */
   min-height: 100vh;
   margin-left: var(--side-w);
   padding: calc(var(--topbar-h) + 8px) 16px 80px;
   background: var(--z-surface);
 }
 
-/* the inspector is fixed over the right edge, so the work area yields to it
-   and whatever is centred stays centred in what is actually visible */
 .main.inspected { margin-right: var(--inspector-w); }
 
-/* the pipeline is one object sitting in the dotted field, so it gets the same
-   air above and below. Other views scroll a list and keep the deeper bottom. */
 .main.pipeline {
   padding-top: calc(var(--topbar-h) + var(--canvas-pad));
   padding-bottom: var(--canvas-pad);
 }
 
-/* The ingest card is the whole task, so it sits in the middle of the dotted
-   space: padding-top is exactly the topbar, making the content box the
-   visible area under it, and the card centers in both axes. */
+/* padding-top equals the topbar so the content box is the visible area and the card centres in it */
 .main.center {
   display: grid;
   place-items: center;
@@ -265,10 +231,6 @@ button {
   opacity: 0.6;
 }
 
-/* --- walk header -------------------------------------------------------- */
-
-/* The summary comes first and the context under it: reviewing is judging the
-   funnel, and the site and operator are only there to say which walk. */
 .walk-header {
   display: flex;
   flex-direction: column;
@@ -303,13 +265,10 @@ button {
 .funnel .n.drop-n { color: var(--z-red); }
 .funnel .arrow, .funnel .label { color: var(--z-muted); }
 
-/* what produced these groups, dimmed: context for the judgement, not the
-   judgement */
 .run-line { color: var(--z-wire); }
 .run-line .sep { opacity: 0.6; }
 
-/* Panel title, same weight as the sidebar header. line-height 1 so the space
-   above the letterforms is the padding, not the padding plus half-leading. */
+/* line-height 1 so the gap above the letterforms is the padding alone, without half-leading */
 .section-title {
   margin: 0 0 12px;
   font-size: 14px;
@@ -317,8 +276,6 @@ button {
   font-weight: 500;
   color: #000;
 }
-
-/* --- inspector: the panel a stage opens, docked opposite the sidebar ----- */
 
 .inspector {
   position: fixed;
@@ -368,7 +325,6 @@ button {
   color: var(--z-muted);
 }
 
-/* label left, control right: Zed's option row */
 .insp-row {
   display: flex;
   align-items: center;
@@ -411,7 +367,6 @@ select.insp-control { cursor: pointer; }
 
 .insp-note { font-size: 12px; line-height: 1.5; color: var(--z-muted); }
 
-/* what the stage emitted, in the same mono as the block's stat line */
 .insp-out {
   margin-top: auto;
   padding: 8px;
@@ -424,7 +379,6 @@ select.insp-control { cursor: pointer; }
   font-variant-numeric: tabular-nums;
 }
 
-/* Zed's secondary button, full width in the panel */
 .insp-btn {
   display: flex;
   align-items: center;
@@ -443,8 +397,6 @@ select.insp-control { cursor: pointer; }
 .insp-btn:hover { background: #fff; }
 .insp-btn:active { transform: translateY(1px) scale(0.99); box-shadow: none; }
 
-/* a run that broke, said once above the pipeline rather than on every block:
-   the stages below it may still hold good frames from an earlier run */
 .notice {
   position: sticky;
   top: calc(var(--topbar-h) + 12px);
@@ -463,9 +415,6 @@ select.insp-control { cursor: pointer; }
 
 .notice b { font-weight: 500; }
 
-/* One request failed. It used to replace the work area and stay there until
-   the browser was reloaded, so a four-second network blip cost your place in
-   a six-hundred-tile grid. Same shape as .notice, with a way out. */
 .banner {
   position: sticky;
   top: calc(var(--topbar-h) + 12px);
@@ -487,7 +436,6 @@ select.insp-control { cursor: pointer; }
 
 .banner .icon-btn { color: var(--z-red); }
 
-/* the poll stopped answering: a state of the connection, not of a request */
 .offline {
   position: absolute;
   left: 50%;
@@ -500,7 +448,6 @@ select.insp-control { cursor: pointer; }
   letter-spacing: 0;
 }
 
-/* the class list an open-vocabulary model looks for, one per line */
 .insp-classes { margin-top: 6px; }
 
 .insp-classes textarea {
@@ -512,7 +459,6 @@ select.insp-control { cursor: pointer; }
   resize: vertical;
 }
 
-/* what a walk is made of, by class: the bar is the share, not decoration */
 .mix {
   display: grid;
   grid-template-columns: 88px 1fr 32px;
@@ -539,14 +485,10 @@ select.insp-control { cursor: pointer; }
   opacity: 0.55;
 }
 
-/* --- masks: the segmenter's output over the frames it came from -------- */
-
 .tile canvas { display: block; width: 100%; aspect-ratio: 1; }
 
 .overlay { position: relative; display: block; }
 
-/* a frame or mask that would not load. Without it a 404 leaves a blank white
-   square, indistinguishable from one that simply has not painted yet. */
 .overlay-bad {
   position: absolute;
   top: 5px;
@@ -566,7 +508,6 @@ select.insp-control { cursor: pointer; }
 
 .seg-toggle input { margin: 0; }
 
-/* the class legend, each chip carrying the colour its outlines are drawn in */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -588,7 +529,6 @@ select.insp-control { cursor: pointer; }
   vertical-align: -1px;
 }
 
-/* one frame held open above the grid, with what it is made of beside it */
 .seg-open {
   display: flex;
   gap: 16px;
@@ -621,8 +561,6 @@ select.insp-control { cursor: pointer; }
   letter-spacing: 0;
   color: var(--z-muted);
 }
-
-/* --- right-click menu on a walk ---------------------------------------- */
 
 .ctx {
   position: fixed;
@@ -661,10 +599,7 @@ select.insp-control { cursor: pointer; }
   color: var(--z-muted);
 }
 
-/* the row the menu belongs to, so it is clear what is about to go */
 .walk-item.menued { background: rgba(0, 0, 0, 0.05); }
-
-/* --- what each run gave: one line per configuration, newest first ------- */
 
 .runs {
   display: flex;
@@ -689,8 +624,6 @@ select.insp-control { cursor: pointer; }
 .run-model { overflow: hidden; text-overflow: ellipsis; }
 .run-tau, .run-out { color: var(--z-text); }
 .run.current .run-tau, .run.current .run-out { color: inherit; }
-
-/* --- calibration modal: Zed's dialog, with the evidence in it ----------- */
 
 .z-scrim {
   position: fixed;
@@ -787,21 +720,14 @@ select.insp-control { cursor: pointer; }
   font-variant-numeric: tabular-nums;
 }
 
-/* the pairs at or under tau are the ones that set it */
 .calib-low { color: var(--z-blue); }
 
 .insp-warn { font-size: 12px; line-height: 1.5; color: var(--z-red); }
 
-/* --- pipeline canvas ---------------------------------------------------- */
-
 .canvas { width: 100%; }
 
-/* the graph is a fixed size, so it centres on its own: nothing to measure
-   when the inspector takes 420 px off the right */
 .graph { position: relative; margin: 0 auto; }
 
-/* wires are grey, not the near-black icon slate: solid so they read cleanly,
-   light enough to stay behind the blocks they connect */
 .links { position: absolute; inset: 0; pointer-events: none; }
 
 .links path {
@@ -810,7 +736,6 @@ select.insp-control { cursor: pointer; }
   stroke-width: 1.5;
 }
 
-/* a link that carries a number rather than the frames themselves */
 .links path.aside { stroke-dasharray: 3 3; }
 
 .links marker path {
@@ -818,8 +743,7 @@ select.insp-control { cursor: pointer; }
   stroke: none;
 }
 
-/* the size is the contract the links are drawn against: W and H in
-   Pipeline.tsx must match, or every arrow starts short of its block */
+/* width and --node-h must match W and H in Pipeline.tsx, which draws the links against them */
 .node {
   position: absolute;
   width: 232px;
@@ -842,16 +766,12 @@ select.insp-control { cursor: pointer; }
   box-shadow: 0 0 0 1px var(--z-blue), var(--z-shadow);
 }
 
-/* a staged edit marks its stage and everything downstream: this is what an
-   Apply would re-compute */
 .node.dirty {
   border-style: dashed;
   border-color: var(--z-amber);
 }
 
 .node.dirty.selected { border-style: solid; }
-
-/* --- the staged-changes pill, floating over the canvas --- */
 
 .pill {
   position: sticky;
@@ -872,7 +792,6 @@ select.insp-control { cursor: pointer; }
 .pill-text { font-size: 13px; }
 .pill-dim { color: var(--z-muted); }
 
-/* a refused change: the edits stay staged and the pill says why */
 .pill.refused { border-color: rgba(228, 0, 20, 0.4); max-width: 640px; }
 .pill.refused .pill-text { color: var(--z-red); }
 
@@ -914,7 +833,6 @@ select.insp-control { cursor: pointer; }
 
 .node-title { font-size: 13px; font-weight: 500; line-height: 1.3; color: #000; }
 
-/* a stage still to come is quiet, the one running pulses */
 .node.queued { opacity: 0.55; }
 .node.running { border-color: var(--z-blue-border); }
 .node.error { border-color: var(--z-red); }
@@ -943,17 +861,12 @@ select.insp-control { cursor: pointer; }
 .node-sub { color: var(--z-muted); }
 .node-stat { color: var(--z-text); }
 
-/* --- tiles -------------------------------------------------------------- */
-
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
   gap: 8px;
 }
 
-/* Site interiors are mostly white wall, so a hairline is not enough to hold a
-   frame: the tile needs an edge dark enough that the image reads as an image
-   and not as a hole in the page. */
 .tile {
   position: relative;
   padding: 0;
@@ -982,9 +895,6 @@ select.insp-control { cursor: pointer; }
 .tile:active { transform: translateY(1px) scale(0.99); }
 .tile.open { border-color: var(--z-blue-border); }
 
-/* One ring, the browser's own. There used to be a .focused class tracking a
-   separate index, so arrowing drew this outline on one tile and :focus-visible
-   on another. The keyboard drives real focus now, so there is only one. */
 .tile:focus-visible {
   outline: none;
   border-color: var(--z-blue);
@@ -993,7 +903,6 @@ select.insp-control { cursor: pointer; }
 
 .tile.dropped img { opacity: 0.35; filter: grayscale(0.6); }
 
-/* the keymap, said once above the grid rather than left to be discovered */
 .keys-hint {
   margin-top: 4px;
   font: 11px/1.6 var(--z-mono);
@@ -1014,7 +923,6 @@ select.insp-control { cursor: pointer; }
   color: var(--z-icon);
 }
 
-/* Small values sit in Zed's keycap shape: hairline, inset lip, mono. */
 .tile .meta {
   position: absolute;
   left: 4px; right: 4px; bottom: 4px;
@@ -1045,8 +953,6 @@ select.insp-control { cursor: pointer; }
 .tile .badge.override { color: var(--z-blue); border-color: var(--z-blue-border); }
 .tile.dropped .badge { color: var(--z-red); border-color: rgba(228, 0, 20, 0.35); }
 
-/* --- expanded group ----------------------------------------------------- */
-
 .group-row {
   grid-column: 1 / -1;
   padding: 10px 12px;
@@ -1074,7 +980,6 @@ select.insp-control { cursor: pointer; }
   color: var(--z-muted);
 }
 
-/* Zed's secondary button: white/50, hairline, grey inset lip. */
 .drop-btn {
   display: flex;
   align-items: center;
@@ -1141,9 +1046,6 @@ select.insp-control { cursor: pointer; }
 .member .cos.borderline { color: var(--z-amber); }
 .member .cos.pick-label { color: var(--z-green); }
 
-/* Relative sharpness across the group, which is the only way it reads: the
-   absolute variance-of-Laplacian swings with how much texture is in view, so
-   a bar against the group's best says what a number cannot. */
 .member .sharp {
   display: block;
   height: 2px;
@@ -1159,9 +1061,6 @@ select.insp-control { cursor: pointer; }
 
 .member.is-pick .sharp > span { background: var(--z-green); }
 
-/* --- jobs --------------------------------------------------------------- */
-
-/* a walk still running carries a dot where a finished one carries its counts */
 .job-dot {
   flex: none;
   width: 7px;
@@ -1177,10 +1076,6 @@ select.insp-control { cursor: pointer; }
 
 @keyframes pulse { 50% { opacity: 0.3; } }
 
-/* --- ingest form -------------------------------------------------------- */
-
-/* Settled chrome, not a modal: it is what the canvas holds until you fill
-   it, so 4 px like every other panel, on the flat shadow. */
 .ingest {
   max-width: 512px;
   padding: 16px;
@@ -1229,8 +1124,6 @@ select.insp-control { cursor: pointer; }
 .field:focus { border-color: var(--z-blue-border); }
 .field::placeholder { color: var(--z-muted); }
 
-/* still empty and still wanted: marked rather than shouted at, and it clears
-   the moment something is typed */
 .field.needed { border-color: rgba(228, 0, 20, 0.4); }
 .field.needed:focus { border-color: var(--z-blue-border); }
 
@@ -1250,7 +1143,6 @@ select.insp-control { cursor: pointer; }
 
 .form-error { margin-top: 12px; font-size: 13px; color: var(--z-red); }
 
-/* Zed's CTA: accent fill with an inset bottom lip. */
 .go {
   display: flex;
   align-items: center;
@@ -1306,8 +1198,6 @@ select.insp-control { cursor: pointer; }
   font-variant-numeric: tabular-nums;
 }
 
-/* a run in flight: the panel still opens, because watching a stage is when
-   you most want to see what it is set to, but nothing in it can be changed */
 .insp-locked {
   padding: 6px 12px;
   border-bottom: 1px solid var(--z-border);
@@ -1318,14 +1208,6 @@ select.insp-control { cursor: pointer; }
 }
 
 .insp-control:disabled, .insp-toggle:disabled { opacity: 0.55; cursor: default; }
-
-/* --- loading ------------------------------------------------------------
-
-   The same mark the ciq-demo free-roam viewer loads behind, so the two tools
-   read as one product. Timing notes are its comments, kept: the extrusion's
-   contours draw on in depth order over 3.4 s, and each face is filled with
-   whatever it stands on so the layer behind it is hidden, which is what makes
-   a flat SVG read as solid. */
 
 .loading {
   display: flex;
@@ -1347,10 +1229,7 @@ select.insp-control { cursor: pointer; }
   position: relative;
   width: 72px;
   height: 72px;
-  /* The mark's faces are filled with whatever it stands on, so each layer
-     hides the ones behind it -- that is what makes a flat SVG read as a
-     solid. It stands on the page surface now, not on a white card, so
-     white would show as a white shape. */
+  /* faces are filled with --card to hide the layers behind them, so it must match the surface the mark sits on */
   --card: var(--z-surface);
   --line: var(--z-blue);
 }
@@ -1361,16 +1240,13 @@ select.insp-control { cursor: pointer; }
   height: 100%;
   display: block;
   overflow: visible;
-  /* the extrusion adds real width, so the drawing shrinks to stay inside */
+  /* the extrusion adds width, so the drawing shrinks to stay inside the box */
   transform: scale(0.74);
   transform-origin: 50% 50%;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
-/* Stroke widths are in the 842-unit viewBox: at 72 px and scale(.74) a
-   unit is 0.063 px, so 8 draws a 0.5 px line -- sub-pixel, which is why
-   the mark reads as delicate. Nudged up from the study's 7/6/5, which
-   went grey at this size. */
+/* stroke widths are in the 842-unit viewBox: at 72 px and scale(.74), 8 draws a 0.5 px line */
 .tsx-loader .wf path {
   fill: var(--card);
   stroke: var(--line);
@@ -1398,8 +1274,7 @@ select.insp-control { cursor: pointer; }
   40%, 74% { stroke-dashoffset: 0; }
   100% { stroke-dashoffset: -3000; }
 }
-/* The front face finishes drawing at 40% of its own timeline, delayed
-   0.44 s -- 1.80 s absolute, 53% of the cycle -- so the caps wait for it. */
+/* the caps wait for the front face, which finishes at 1.80 s (40% of wd-draw plus its 0.44 s delay) */
 @keyframes wd-cap {
   0%, 47% { stroke-dashoffset: 145; }
   49.18%, 86% { stroke-dashoffset: 0; }
@@ -1413,16 +1288,9 @@ select.insp-control { cursor: pointer; }
   font-variant-numeric: tabular-nums;
 }
 
-/* --- states ------------------------------------------------------------- */
-
-/* the whole-page states. Named apart from the `error` modifier that marks a
-   dot or a block: a bare `.error` rule matches those too, and 48px of padding
-   turns a 7px dot into a red bar. */
-.empty, .page-error {
+.empty {
   padding: 48px 0;
   text-align: center;
   font-size: 13px;
   color: var(--z-muted);
 }
-
-.page-error { color: var(--z-red); }

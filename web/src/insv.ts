@@ -1,22 +1,14 @@
-// Reading an .insv well enough to refuse it before it is uploaded.
-//
-// An .insv is an MP4 with Insta360's own trailer bolted on, so the frame size
-// is in a `tkhd` box: width and height are its last eight bytes, 16.16 fixed
-// point. Parsing those beats handing the file to a <video> element, which
-// needs the media pipeline and does not run in a background tab.
-//
-// The shape is what says whether a file is a whole recording. Two fisheye
-// circles side by side make a 2:1 frame and stand alone; one circle per file
-// makes a square one, and those always come as a _00_/_10_ pair. Uploading
-// half a pair stitches the front hemisphere over the back, so it is worth
-// catching here rather than after a few hundred megabytes have gone up.
+// reads enough of an .insv to refuse it before upload. It is an MP4 with an
+// Insta360 trailer; width and height are the last eight bytes of `tkhd`, 16.16
+// fixed point. A 2:1 frame holds both lenses; a square frame is one lens of a
+// _00_/_10_ pair, and half a pair stitches the front hemisphere over the back.
 
 const SCAN = 8 << 20   // moov sits at one end or the other; read both
 
 export type FrameSize = { w: number; h: number }
 
 /** The largest track's frame size, or null if no `tkhd` turned up. */
-export function frameSize(buf: ArrayBuffer): FrameSize | null {
+function frameSize(buf: ArrayBuffer): FrameSize | null {
   const b = new Uint8Array(buf)
   const dv = new DataView(buf)
   let best: FrameSize | null = null
@@ -44,11 +36,10 @@ export async function readFrameSize(file: File): Promise<FrameSize | null> {
   return null
 }
 
-export const lensesInFrame = (s: FrameSize) => (s.w >= s.h * 1.5 ? 2 : 1)
+const lensesInFrame = (s: FrameSize) => (s.w >= s.h * 1.5 ? 2 : 1)
 
-// Insta360 appends its own trailer after the MP4, ending in this marker, with
-// the camera's model in a protobuf-shaped record inside it. Reading it here
-// means the form can show what it found rather than the operator guessing.
+// the Insta360 trailer ends in this marker and holds the camera model in a
+// protobuf-shaped record
 const MAGIC = '8db42d694ccc418790edff439fe026bf'
 const TRAILER = 2 << 20
 
@@ -58,12 +49,12 @@ export async function readCamera(file: File): Promise<string> {
   const text = new TextDecoder('latin1').decode(tail)
   if (!text.endsWith(MAGIC)) return ''
   // field 2, length-delimited: \x12 <len> "Insta360 ..."
+  // oxlint-disable-next-line no-control-regex
   const at = /\x12([\x01-\x40])(Insta360 [ -~]{1,24})/.exec(text)
   return at ? at[2].slice(0, at[1].charCodeAt(0)) : ''
 }
 
-// VID_20260728_114811_..., the camera's own local clock. The container's
-// creation_time is UTC, and a site cares which hour of its own day this was.
+// VID_20260728_114811_..., the camera's local clock; the container's creation_time is UTC
 const STAMP = /VID_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_/
 
 export function stampFromName(name: string): { date: string; time: string } {
@@ -73,8 +64,7 @@ export function stampFromName(name: string): { date: string; time: string } {
     : { date: '', time: '' }
 }
 
-/** Why this selection cannot be processed, or "" if it can. Mirrors the
-    server's guards so the answer arrives before the upload, not after it. */
+/** Why this selection cannot be processed, or "" if it can. Mirrors the server's guards. */
 export function whyNotReady(files: File[], sizes: (FrameSize | null)[]): string {
   if (!files.length) return 'Drop the .insv here to start'
   const names = files.map((f) => f.name)
