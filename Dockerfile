@@ -1,25 +1,15 @@
-# accio: the API, the worker and the built frontend in one image.
+# The stitcher (MediaSDK) is not in this image. accio starts it as a sibling
+# container through the host's Docker socket, so only the docker client is
+# needed here. See settings.py for why the data root must be mounted at the
+# same path inside and out.
 #
-# The stitcher is deliberately not in here. MediaSDK ships as its own amd64
-# image with its own model tree, and accio drives it by talking to the host's
-# Docker daemon through the mounted socket, so the container needs the docker
-# client but not the daemon. That is also why the data root has to be mounted
-# at the same path inside and out: see accio/settings.py.
-#
-# It runs as root, and that is a consequence of the socket: a non-root user
-# would need the host's docker group GID baked in, which is not portable, and
-# the socket makes anyone holding it host root anyway. The mitigation is on
-# the other side: compose publishes the port on loopback only, so nothing
-# reaches this process except what the host explicitly puts in front of it.
+# Runs as root: the mounted socket is host root anyway, and a non-root user
+# would need the host's docker group GID baked in.
 
-# --- the frontend ----------------------------------------------------------
 FROM node:22-alpine AS web
-# Pinned because npm versions disagree about the lock file, not for taste:
-# 11.12+ writes hoisted @emnapi/* entries that 11.6 strips out again, so a
-# local `npm install` and a `npm ci` from a stock image reject each other's
-# work. One npm owns the lock. Match it to whatever `npm -v` says on the
-# machine that regenerates it, or the build stops with "Missing: ... from
-# lock file", which is a version disagreement and not a missing package.
+# npm 11.12+ writes hoisted @emnapi/* lock entries that 11.6 strips again, so
+# the lock file only round-trips with one npm version. Match whatever
+# regenerated package-lock.json.
 ARG NPM_VERSION=11.6.2
 RUN npm i -g npm@${NPM_VERSION}
 WORKDIR /web
@@ -28,23 +18,18 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-# --- the API ---------------------------------------------------------------
 FROM python:3.12-slim
 
-# ffprobe reads the .insv's fps and frame count before anything is stitched
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
-# the client only. Pulling docker.io from apt would bring a daemon we never
-# start, to talk to the one on the host we do.
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /usr/local/bin/uv
 
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-# dependencies before source, so editing a stage does not re-resolve torch
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 

@@ -5,8 +5,6 @@ description = "Frame preparation for 360 site walks: ingest, review, tracked exp
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.26",
-    # headless: nothing here ever opens a window, and the GUI build wants
-    # libGL and an X stack that a server image has no reason to carry
     "opencv-python-headless>=4.9",
     "torch>=2.2",
     "timm>=1.0",
@@ -21,12 +19,10 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "httpx>=0.28"]  # TestClient speaks httpx
+dev = ["pytest>=8", "httpx>=0.28"]
 
-# On Linux, PyPI's torch bundles the CUDA runtime: ~2.5 GB of nvidia-* wheels
-# that a CPU-only server pulls, stores and never calls. macOS wheels are
-# CPU-only already, so this is scoped to the platform that has the choice.
-# Delete these two blocks and re-lock the day the server grows a GPU.
+# CPU-only torch on Linux; the default wheel pulls ~2.5 GB of CUDA libraries.
+# Drop these two blocks and re-lock for a GPU server.
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
