@@ -5,3 +5,5 @@ node_modules/
 web/dist/
 data/
 .DS_Store
+stitcher/*.xz
+stitcher/*.deb

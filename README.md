@@ -34,8 +34,17 @@ cd web && npm install && npm run dev  # UI on :5173, proxies /api to :8000
 uv run pytest
 ```
 
-The stitcher is the Insta360 MediaSDK in its own Docker image
-(`insta360-mediasdk:3.1.1`, amd64). `docker` and `ffprobe` must be on PATH.
+`docker` and `ffprobe` must be on PATH. The stitch runs in a separate image,
+`insta360-mediasdk:3.1.1`, built from Insta360's licensed SDK download, which
+is not in the repo. Put `libMediaSDK-dev-3.1.1.0-amd64.tar.xz` from the
+developer portal (or the company OneDrive, under `accio/`) in `stitcher/` and
+build it once:
+
+```
+docker build --platform linux/amd64 -t insta360-mediasdk:3.1.1 stitcher
+```
+
+It is x86_64 only; on Apple Silicon it runs under emulation.
 
 ## Deploying
 
