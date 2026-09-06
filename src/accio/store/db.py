@@ -1,12 +1,9 @@
-"""SQLite store: review decisions layered over immutable pipeline output.
+"""SQLite store: walk metadata and review decisions.
 
-The manifest.csv a walk's pipeline run produces is never edited. This store
-holds what humans decided on top of it: pick overrides (swap the auto-pick
-for another member of the same duplicate group) and dropped groups. Resetting
-a walk is deleting its decision rows; the auto-picks come back untouched.
-
-Every decision is logged, not just its latest state: a pattern in overrides
-is evidence the auto-pick rule needs changing (see the labelling doc, item 4).
+The pipeline's manifest.csv is never edited. Decisions (pick overrides and
+dropped groups) are logged on top of it, keyed by face file name so they
+survive a re-run that renumbers the manifest. Effective state is a replay of
+the log.
 """
 
 import sqlite3
@@ -36,32 +33,27 @@ CREATE TABLE IF NOT EXISTS decisions (
     pick TEXT,                       -- for 'pick': the member now chosen
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS ix_decisions_anchor ON decisions (walk_id, anchor, id);
+CREATE INDEX IF NOT EXISTS ix_decisions_walk ON decisions (walk_id, id);
 """
 
-
-# Connections are per thread and the server opens one lazily on each thread's
-# first request, so a redeploy that adds a column used to race itself: two
-# threads read the same PRAGMA table_info, both decided to ALTER, and the
-# second died with "duplicate column name" as a bare 500. The check-then-act
-# below is only sound one connect at a time.
+# connections are per thread; two threads migrating at once both see the
+# column missing and the second ALTER fails
 _migrate_lock = threading.Lock()
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA foreign_keys = ON")
     with _migrate_lock:
         _retire_index_decisions(conn)
+        # (walk_id, anchor, id) served nothing: every read orders by id alone
+        conn.execute("DROP INDEX IF EXISTS ix_decisions_anchor")
         conn.executescript(SCHEMA)
         _add_missing_walk_columns(conn)
     return conn
 
 
 def _add_missing_walk_columns(conn: sqlite3.Connection) -> None:
-    """CREATE TABLE IF NOT EXISTS does not widen a table that already exists,
-    so fields added later are added here rather than by rebuilding the row."""
     have = {r[1] for r in conn.execute("PRAGMA table_info(walks)")}
     for col in ("floor", "shot_time", "camera"):
         if col not in have:
@@ -70,13 +62,10 @@ def _add_missing_walk_columns(conn: sqlite3.Connection) -> None:
 
 
 def _retire_index_decisions(conn: sqlite3.Connection) -> None:
-    """Drop a pre-face-name decisions table so the new one can be made.
+    """Drop the old decisions table that keyed on manifest row number.
 
-    Decisions used to key on the manifest row number, which only means
-    anything while the manifest never changes. Re-running a stage renumbers
-    the rows, so a stored index would silently point at a different frame.
-    Those rows are review clicks on walks that predate this, not worth
-    translating; deleting them restores the auto-picks.
+    Those rows pointed at whatever frame carried that index at the time;
+    deleting them restores the auto-picks.
     """
     cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)")}
     if "anchor_idx" in cols:
@@ -88,12 +77,15 @@ WALK_FIELDS = ("site", "building", "floor", "stage", "operator",
                "mount_height_cm", "shot_date", "shot_time", "camera")
 
 
-def save_walk_meta(conn: sqlite3.Connection, walk_id: str, video_file: str,
-                   **fields) -> None:
-    """Insert or update the item-8 capture metadata for a walk."""
+def _check_fields(fields: dict) -> None:
     unknown = set(fields) - set(WALK_FIELDS)
     if unknown:
         raise ValueError(f"unknown walk fields: {sorted(unknown)}")
+
+
+def save_walk_meta(conn: sqlite3.Connection, walk_id: str, video_file: str,
+                   **fields) -> None:
+    _check_fields(fields)
     cols = ["walk_id", "video_file", *fields]
     conn.execute(
         f"INSERT INTO walks ({', '.join(cols)}) "
@@ -105,15 +97,7 @@ def save_walk_meta(conn: sqlite3.Connection, walk_id: str, video_file: str,
 
 
 def update_walk_meta(conn: sqlite3.Connection, walk_id: str, **fields) -> None:
-    """Change some of the capture metadata on a walk that already exists.
-
-    Metadata is the one thing about a walk that is corrected rather than
-    re-derived: nothing downstream is computed from it, it is copied into the
-    EXIF at export. So it updates in place instead of re-running anything.
-    """
-    unknown = set(fields) - set(WALK_FIELDS)
-    if unknown:
-        raise ValueError(f"unknown walk fields: {sorted(unknown)}")
+    _check_fields(fields)
     if not fields:
         return
     cur = conn.execute(
@@ -138,7 +122,6 @@ def walk_meta(conn: sqlite3.Connection, walk_id: str) -> dict | None:
 
 
 def forget_walk(conn: sqlite3.Connection, walk_id: str) -> None:
-    """Drop a walk's metadata and every decision made on it."""
     conn.execute("DELETE FROM decisions WHERE walk_id = ?", (walk_id,))
     conn.execute("DELETE FROM walks WHERE walk_id = ?", (walk_id,))
     conn.commit()
@@ -146,8 +129,6 @@ def forget_walk(conn: sqlite3.Connection, walk_id: str) -> None:
 
 def log_decision(conn: sqlite3.Connection, walk_id: str, anchor: str,
                  action: str, pick: str | None = None) -> None:
-    """Anchor and pick are face file names, so a decision keeps meaning the
-    same frame after a stage re-runs and renumbers the manifest."""
     conn.execute(
         "INSERT INTO decisions (walk_id, anchor, action, pick) "
         "VALUES (?, ?, ?, ?)",
@@ -156,11 +137,7 @@ def log_decision(conn: sqlite3.Connection, walk_id: str, anchor: str,
 
 
 def effective_state(conn: sqlite3.Connection, walk_id: str) -> dict[str, dict]:
-    """Latest decision per group: {anchor face name: {pick, dropped}}.
-
-    Replays the log in order, so state is always derivable and the full
-    history stays queryable for override-pattern analysis.
-    """
+    """Latest decision per group: {anchor face name: {pick, dropped}}."""
     state: dict[str, dict] = {}
     rows = conn.execute(
         "SELECT anchor, action, pick FROM decisions "
@@ -178,7 +155,6 @@ def effective_state(conn: sqlite3.Connection, walk_id: str) -> dict[str, dict]:
 
 
 def override_log(conn: sqlite3.Connection, walk_id: str | None = None) -> list[dict]:
-    """Full decision history, for the override-pattern review."""
     q = ("SELECT walk_id, anchor, action, pick, created_at "
          "FROM decisions")
     args: tuple = ()

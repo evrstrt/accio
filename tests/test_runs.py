@@ -1,13 +1,9 @@
-"""The run history: what each configuration gave, kept so two can be compared.
-
-A walk on disk only ever shows the settings that ran last. Without this,
-comparing two backbones means writing the numbers down by hand.
-"""
+"""The run history, kept so two configurations can be compared."""
 
 import json
 
 from accio.core.params import CalibParams, DedupParams, EmbedParams, PipelineParams
-from accio.jobs.pipeline import RUNS_FILE, log_run, read_runs
+from accio.jobs.pipeline import RUNS_FILE, RUNS_KEPT, log_run, read_runs
 
 CALIB = {"reference": {"median": 0.9815, "n": 40}}
 
@@ -20,7 +16,7 @@ def dinov2() -> PipelineParams:
         calib=CalibParams())
 
 
-def test_a_run_records_what_it_took_and_what_it_gave(tmp_path):
+def test_run_records_params_and_result(tmp_path):
     log_run(tmp_path, PipelineParams(), CALIB, "gate", 148, 103)
     (r,) = read_runs(tmp_path)
     assert r["backbone"] == PipelineParams().embed.model_name
@@ -28,7 +24,7 @@ def test_a_run_records_what_it_took_and_what_it_gave(tmp_path):
     assert (r["reference"], r["pairs"]) == (0.9815, 40)
     assert (r["faces"], r["anchors"], r["absorbed"]) == (148, 103, 45)
     assert r["from"] == "gate"
-    assert r["at"]                                   # stamped, not asserted on
+    assert r["at"]
 
 
 def test_runs_accumulate_newest_first(tmp_path):
@@ -39,7 +35,7 @@ def test_runs_accumulate_newest_first(tmp_path):
     assert runs[0]["backbone"].endswith("dinov2.lvd142m")
 
 
-def test_the_history_is_capped_but_keeps_the_recent_end(tmp_path):
+def test_history_capped_keeps_recent(tmp_path):
     for i in range(30):
         log_run(tmp_path, PipelineParams(), CALIB, "select", 148, i)
     runs = read_runs(tmp_path, limit=20)
@@ -47,20 +43,38 @@ def test_the_history_is_capped_but_keeps_the_recent_end(tmp_path):
     assert [r["anchors"] for r in runs[:3]] == [29, 28, 27]
 
 
-def test_a_run_without_a_calibration_still_records(tmp_path):
-    """A fixed threshold does not need the reference, but the row is the same
-    shape either way or the history cannot be read as a table."""
+def test_file_capped(tmp_path):
+    """Capping only the read lets a walk re-run for months grow the file forever."""
+    for i in range(RUNS_KEPT + 7):
+        log_run(tmp_path, PipelineParams(), CALIB, "select", 148, i)
+    lines = (tmp_path / RUNS_FILE).read_text().splitlines()
+    assert len(lines) == RUNS_KEPT
+    assert json.loads(lines[-1])["anchors"] == RUNS_KEPT + 6
+    assert json.loads(lines[0])["anchors"] == 7
+
+
+def test_torn_line_skipped(tmp_path):
+    log_run(tmp_path, PipelineParams(), CALIB, "select", 148, 1)
+    with open(tmp_path / RUNS_FILE, "a") as f:
+        f.write('{"anchors": 2, "tau"')
+    (r,) = read_runs(tmp_path)
+    assert r["anchors"] == 1
+    log_run(tmp_path, PipelineParams(), CALIB, "select", 148, 3)
+    assert [r["anchors"] for r in read_runs(tmp_path)] == [3, 1]
+
+
+def test_run_without_calibration(tmp_path):
     log_run(tmp_path, PipelineParams(), None, "select", 148, 79)
     (r,) = read_runs(tmp_path)
     assert r["reference"] == 0 and r["pairs"] == 0
     assert r["anchors"] == 79
 
 
-def test_a_walk_with_no_history_reads_as_empty(tmp_path):
+def test_no_history_empty(tmp_path):
     assert read_runs(tmp_path) == []
 
 
-def test_the_file_is_append_only(tmp_path):
+def test_run_appended_after_earlier(tmp_path):
     log_run(tmp_path, PipelineParams(), CALIB, "gate", 148, 103)
     first = (tmp_path / RUNS_FILE).read_text()
     log_run(tmp_path, dinov2(), CALIB, "embed", 148, 107)

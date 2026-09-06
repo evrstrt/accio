@@ -1,28 +1,25 @@
-"""run_walk glue invariants: manifest.csv and embeddings.npz stay row-aligned.
-
-The stitch is faked (no Docker in tests) and the embedder is a stub returning
-orthogonal unit vectors, with the last face a copy of the first so exactly one
-absorption happens at a known place.
+"""run_walk glue: manifest.csv and embeddings.npz stay row-aligned. The stitch
+is faked and the stub embedder repeats the first face as the last.
 """
 
 import csv
+import json
 
 import cv2
 import numpy as np
+import pytest
 
 from accio.core import extract
 from accio.core.extract import PanoFrame, pano_name
 from accio.core.params import (DedupParams, FaceParams, GateParams,
                                PipelineParams)
-from accio.jobs.pipeline import run_walk
+from accio.jobs.pipeline import MANIFEST_COLUMNS, gate, read_json, rerun, run_walk
 
 N_PANOS = 3
 PARAMS = PipelineParams(
     faces=FaceParams(size=32, yaws=(0, 180)),   # 2 faces per pano -> 6 rows
     gate=GateParams(dead=0.0),                  # keep every pano
-    # three panoramas spanning one second have no pairs 20s apart, so there is
-    # no far distribution to calibrate against and the default rule refuses.
-    # Fixed is what that refusal names, and this test is about the glue anyway.
+    # three panoramas in one second have no far pairs, so the calibrated rule refuses
     dedup=DedupParams(rule="fixed"),
 )
 
@@ -63,24 +60,21 @@ def test_run_walk_manifest_and_embeddings_align(tmp_path, monkeypatch):
              progress=lambda stage, status, **c: seen.append((stage, status)))
     walk_dir = tmp_path / "out" / "walk"
 
-    # the source is reported once, then every stage runs and completes in order
     assert seen == [("video", "done")] + [
         (s, st) for s in ("stitch", "gate", "faces", "embed", "calibrate", "select")
         for st in ("running", "done")]
 
     with open(walk_dir / "manifest.csv", newline="") as f:
         rows = list(csv.DictReader(f))
-    saved = np.load(walk_dir / "embeddings.npz")
+    with np.load(walk_dir / "embeddings.npz") as saved:
+        embeddings, model = saved["embeddings"], str(saved["model"])
 
-    # one embedding row per manifest row, in the same order, model recorded
     assert len(rows) == N_PANOS * 2
-    assert saved["embeddings"].shape[0] == len(rows)
-    assert np.allclose(saved["embeddings"], expected)
-    assert str(saved["model"]) == PARAMS.embed.model_name
+    assert embeddings.shape[0] == len(rows)
+    assert np.allclose(embeddings, expected)
+    assert model == PARAMS.embed.model_name
 
-    # the duplicate embedding was absorbed, everything else kept. Which of the
-    # identical pair anchors is decided by sharpness, not by arrival, so the
-    # test asks that one absorbed the other rather than naming which.
+    # sharpness decides which of the identical pair anchors
     absorbed = [i for i, r in enumerate(rows) if r["kept"] == "0"]
     assert len(absorbed) == 1 and absorbed[0] in (0, 5)
     twin = 5 if absorbed[0] == 0 else 0
@@ -88,6 +82,47 @@ def test_run_walk_manifest_and_embeddings_align(tmp_path, monkeypatch):
     assert float(rows[absorbed[0]]["cosine"]) == 1.0
     assert float(rows[twin]["sharpness"]) >= float(rows[absorbed[0]]["sharpness"])
 
-    # manifest rows follow capture order: pano major, yaw minor
     assert [(r["pano_idx"], r["yaw"]) for r in rows] == [
         (str(p), str(y)) for p in range(N_PANOS) for y in (0, 180)]
+
+
+def test_empty_stitch_named(tmp_path):
+    """np.concatenate([]) on an empty walk names nothing."""
+    with pytest.raises(RuntimeError, match="no panoramas"):
+        gate([], PARAMS)
+
+
+def empty_walk(tmp_path):
+    out = tmp_path / "out" / "walk"
+    out.mkdir(parents=True)
+    (out / "source.json").write_text(json.dumps({"fps": 30.0}))
+    (out / "manifest.csv").write_text(",".join(MANIFEST_COLUMNS) + "\n")
+    return out
+
+
+def test_rerun_empty_manifest_named(tmp_path):
+    out = empty_walk(tmp_path)
+    with pytest.raises(RuntimeError, match="no faces"):
+        rerun(None, out, PARAMS, StubEmbedder(), "select")
+
+
+def test_rerun_to_calibrate_needs_video(tmp_path):
+    out = empty_walk(tmp_path)
+    with pytest.raises(ValueError, match="needs the original video"):
+        rerun(None, out, PARAMS, StubEmbedder(), "embed")
+
+
+def test_rerun_corrupt_source_named(tmp_path):
+    out = empty_walk(tmp_path)
+    (out / "source.json").write_text("{torn")
+    with pytest.raises(RuntimeError, match="source.json"):
+        rerun(None, out, PARAMS, StubEmbedder(), "select")
+
+
+def test_read_json_none_on_unreadable(tmp_path):
+    assert read_json(tmp_path / "missing.json") is None
+    (tmp_path / "torn.json").write_text("{")
+    assert read_json(tmp_path / "torn.json") is None
+    (tmp_path / "ok.json").write_text("[1]")
+    assert read_json(tmp_path / "ok.json") == [1]
+    assert read_json(tmp_path) is None

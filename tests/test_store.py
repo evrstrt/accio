@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from accio.store.db import (connect, effective_state, forget_walk, log_decision,
@@ -67,40 +69,40 @@ def seeded(tmp_path):
     return conn
 
 
-def test_updating_one_field_leaves_the_others_alone(tmp_path):
+def test_update_one_field(tmp_path):
     conn = seeded(tmp_path)
     update_walk_meta(conn, "w1", site="ASHV")
     m = walk_meta(conn, "w1")
     assert m["site"] == "ASHV"
     assert (m["building"], m["operator"], m["mountHeightCm"]) == ("T2", "ram", 178)
-    assert m["videoFile"] == "w1.insv"     # not something the edit can reach
+    assert m["videoFile"] == "w1.insv"
 
 
-def test_a_field_can_be_cleared(tmp_path):
+def test_update_clears_field(tmp_path):
     conn = seeded(tmp_path)
     update_walk_meta(conn, "w1", operator="")
     assert walk_meta(conn, "w1")["operator"] == ""
 
 
-def test_updating_nothing_is_not_an_error(tmp_path):
+def test_update_nothing_noop(tmp_path):
     conn = seeded(tmp_path)
     update_walk_meta(conn, "w1")
     assert walk_meta(conn, "w1")["site"] == "GCMR"
 
 
-def test_updating_a_walk_that_is_not_there_says_so(tmp_path):
+def test_update_missing_walk_raises(tmp_path):
     conn = seeded(tmp_path)
     with pytest.raises(KeyError):
         update_walk_meta(conn, "nope", site="X")
 
 
-def test_unknown_fields_are_refused_rather_than_ignored(tmp_path):
+def test_update_unknown_field_refused(tmp_path):
     conn = seeded(tmp_path)
     with pytest.raises(ValueError, match="video_file"):
         update_walk_meta(conn, "w1", video_file="elsewhere.insv")
 
 
-def test_forgetting_a_walk_takes_its_decisions_with_it(tmp_path):
+def test_forget_walk_drops_decisions(tmp_path):
     conn = seeded(tmp_path)
     save_walk_meta(conn, "w2", "w2.insv", site="ASHV")
     log_decision(conn, "w1", A, "drop")
@@ -110,10 +112,34 @@ def test_forgetting_a_walk_takes_its_decisions_with_it(tmp_path):
 
     assert walk_meta(conn, "w1") is None
     assert effective_state(conn, "w1") == {}
-    # the other walk is untouched
     assert walk_meta(conn, "w2")["site"] == "ASHV"
     assert [d["walkId"] for d in override_log(conn)] == ["w2"]
 
 
-def test_forgetting_a_walk_that_was_never_there_is_not_an_error(tmp_path):
+def test_forget_missing_walk_noop(tmp_path):
     forget_walk(make_conn(tmp_path), "nope")
+
+
+def test_decisions_index_covers_replay(tmp_path):
+    """(walk_id, anchor, id) leaves ORDER BY id to a temp b-tree."""
+    conn = make_conn(tmp_path)
+    names = {r[1] for r in conn.execute("PRAGMA index_list(decisions)")}
+    assert names == {"ix_decisions_walk"}
+    plan = " ".join(r[3] for r in conn.execute(
+        "EXPLAIN QUERY PLAN SELECT anchor, action, pick FROM decisions "
+        "WHERE walk_id = ? ORDER BY id", ("w",)))
+    assert "ix_decisions_walk" in plan and "TEMP B-TREE" not in plan
+
+
+def test_stale_index_dropped_on_connect(tmp_path):
+    raw = sqlite3.connect(tmp_path / "accio.db")
+    raw.executescript("""
+        CREATE TABLE decisions (id INTEGER PRIMARY KEY, walk_id TEXT NOT NULL,
+            anchor TEXT NOT NULL, action TEXT NOT NULL, pick TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')));
+        CREATE INDEX ix_decisions_anchor ON decisions (walk_id, anchor, id);
+    """)
+    raw.close()
+    conn = make_conn(tmp_path)
+    names = {r[1] for r in conn.execute("PRAGMA index_list(decisions)")}
+    assert names == {"ix_decisions_walk"}

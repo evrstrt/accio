@@ -1,15 +1,9 @@
-"""The pipeline end to end: one .insv walk -> deduplicated label candidates.
+"""One .insv walk -> deduplicated label candidates.
 
-run_walk() writes out/<walk>/pano/, out/<walk>/faces/,
-out/<walk>/manifest.csv with a kept flag plus anchor/cosine for every
-absorbed face, and out/<walk>/embeddings.npz with one row per manifest
-row. The ingest job calls this; there is no other entry point.
-
-Changing a setting re-runs from the stage that setting belongs to, not from
-the start: rerun() enters the same chain partway down and reuses whatever is
-already on disk above it. That is why each stage is its own function and why
-the stages that persist their output (stitch, gate, faces) can all be read
-back as well as written.
+run_walk() writes out/<walk>/pano/, out/<walk>/faces/, manifest.csv and
+embeddings.npz (one row per manifest row). rerun() enters the same chain at
+a later stage and reads the stages above it back from disk, so stitch, gate
+and faces each have a read-back counterpart.
 """
 
 import csv
@@ -29,14 +23,16 @@ from ..core import (atomic, blur, calibrate as calibrate_mod, extract, faces,
 from ..core.calibrate import calibrate
 from ..core.dedup import drop_solo, greedy_dedup
 from ..core.embed import Embedder
-from ..core.params import PipelineParams
+from ..core.export import review_counts
+from ..core.params import (BACKBONES, SEGMENTERS, SITE_CLASSES, PipelineParams,
+                           from_dict)
 
 EMBED_CHUNK = 64  # faces held in memory at once on the way to the embedder
 MANIFEST_COLUMNS = ["pano_idx", "t_sec", "yaw", "path", "kept", "anchor",
                     "cosine", "sharpness"]
 STAGES = ("stitch", "gate", "faces", "embed", "calibrate", "select", "segment")
 
-# a face on its way through the pipeline: (pano index, t, yaw, file)
+# (pano index, t, yaw, file)
 FaceRow = tuple[int, float, int, Path]
 
 
@@ -45,14 +41,7 @@ def face_name(pano_idx: int, yaw: int) -> str:
 
 
 class Clock:
-    """Wall clock per stage, wrapped around the progress callback.
-
-    Nothing recorded timing before this, so every capacity question had to be
-    answered by reading file mtimes off disk and guessing which write belonged
-    to which stage. The run record already says what a configuration produced;
-    what it cost is the other half, and it is the half that decides whether a
-    backbone or a segmenter is affordable on a real walk.
-    """
+    """Per-stage wall time, wrapped around the progress callback."""
 
     def __init__(self, say):
         self._say = say
@@ -70,14 +59,11 @@ class Clock:
 
 def run_walk(video: Path, out_root: Path, params: PipelineParams,
              embedder: Embedder, progress=None, segmenter=None) -> dict:
-    """progress(stage, status, **counts) is called around every stage, so the
-    caller can show the run advancing instead of a single opaque wait."""
+    """progress(stage, status, **counts) is called around every stage."""
     say = Clock(progress or (lambda *a, **k: None))
     out = out_root / video.stem
     out.mkdir(parents=True, exist_ok=True)
 
-    # what the camera actually recorded, kept next to the derived frames: it is
-    # the denominator the rest of the funnel is a fraction of
     native_fps, frames, width, height = extract.probe(video)
     files = extract.lens_files(video)
     atomic.write_json(
@@ -85,8 +71,6 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
         {"frames": frames, "fps": native_fps,
          "seconds": round(frames / native_fps, 1),
          "files": [p.name for p in files], "width": width, "height": height,
-         # both packings are dual-fisheye; the count says whether this walk
-         # actually had both circles to stitch from
          "lenses": extract.lenses_in_frame(width, height) * len(files)})
     say("video", "done", frames=frames, seconds=round(frames / native_fps))
 
@@ -98,30 +82,33 @@ def run_walk(video: Path, out_root: Path, params: PipelineParams,
                  panos=panos, segmenter=segmenter)
 
 
-def rerun(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
-          first: str, progress=None, segmenter=None) -> dict:
-    """Re-run from `first` down, reusing the stages above it as they are.
+def rerun(video: Path | None, out: Path, params: PipelineParams,
+          embedder: Embedder, first: str, progress=None, segmenter=None) -> dict:
+    """Re-run from `first` down; the stages above are reported done.
 
-    The stages above are reported done rather than skipped silently, so the
-    canvas shows the same blocks either way and the ones that were reused are
-    visibly not running.
+    `video` is only needed when `first` is at or before the calibrate stage.
     """
     say = Clock(progress or (lambda *a, **k: None))
     if first not in STAGES:
         raise ValueError(f"unknown stage {first!r}")
     if first == "stitch":
         raise ValueError("re-stitching is not wired up yet; re-ingest the walk")
-    native_fps = json.loads((out / "source.json").read_text())["fps"]
+    if video is None and STAGES.index(first) <= STAGES.index("calibrate"):
+        raise ValueError(f"re-running from {first} needs the original video")
+    source = read_json(out / "source.json")
+    if not isinstance(source, dict) or "fps" not in source:
+        raise RuntimeError(f"{out.name} has no readable source.json; "
+                           "re-ingest the walk")
     say("video", "done")
     for stage in STAGES[:STAGES.index(first)]:
         say(stage, "done")
-    return _tail(video, out, params, embedder, native_fps, first, say,
+    return _tail(video, out, params, embedder, source["fps"], first, say,
                  segmenter=segmenter)
 
 
-def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
-          native_fps: float, first: str, say, panos=None, segmenter=None) -> dict:
-    """The pipeline below the stitch, entered at `first`."""
+def _tail(video: Path | None, out: Path, params: PipelineParams,
+          embedder: Embedder, native_fps: float, first: str, say, panos=None,
+          segmenter=None) -> dict:
     start = STAGES.index(first)
 
     if start <= STAGES.index("faces"):
@@ -131,12 +118,15 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
                          else extract.load_panos(out / "pano"), params)
             say("gate", "done", sharp=len(sharp))
         else:
-            sharp = sharp_panos(out)   # unchanged by this re-run, read back
+            sharp = sharp_panos(out)
         say("faces", "running")
         records, sharpness = render_faces(out, sharp, params)
         say("faces", "done", faces=len(records))
     else:
         records, sharpness = face_rows(out)
+    if not records:
+        raise RuntimeError(f"{out.name} has no faces to work with; nothing "
+                           "survived the gate, or the manifest is empty")
 
     if start <= STAGES.index("embed"):
         say("embed", "running")
@@ -147,9 +137,6 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
             embeddings = data["embeddings"]
 
     named = [(i, t, yaw, path.name) for i, t, yaw, path in records]
-    # what elsewhere scores on this walk, which is what the threshold has to
-    # stay above, plus the identical-content reference as a health check: a low
-    # one means the stitch, the exposure or the backbone is misbehaving.
     if start <= STAGES.index("calibrate"):
         say("calibrate", "running")
         calib = calibrate(video, out, named, embeddings, params, embedder,
@@ -169,29 +156,24 @@ def _tail(video: Path, out: Path, params: PipelineParams, embedder: Embedder,
     kept = len(result.kept)
     say("select", "done", anchors=kept, absorbed=len(records) - kept, solo=solo)
 
-    # what is in the frames that survived. Annotation only: it runs after the
-    # set is decided and never changes it, so a wrong mask costs a correction
-    # rather than a candidate.
+    # annotation only: runs after the set is decided and never changes it
     if params.segment.enabled:
         say("segment", "running")
         named_kept = [named[i][3] for i in result.kept]
         classes = run_segment(out, named_kept, params, segmenter)
         say("segment", "done", segmented=len(classes))
-    elif start <= STAGES.index("segment"):
+    else:
         clear_segmentation(out)
 
-    log_run(out, params, calib, first, len(records), kept, solo,
-            getattr(say, "seconds", {}))
-    clear_failure(out)     # this walk ran through; whatever broke before is past
+    log_run(out, params, calib, first, len(records), kept, solo, say.seconds)
+    clear_failure(out)
     return dict(walk=out.name, faces=len(records), anchors=kept,
                 absorbed=len(records) - kept, tau=params.dedup.tau,
                 rule=params.dedup.rule)
 
 
 def imread(path: Path):
-    """cv2.imread answers None for anything it cannot decode, and every caller
-    here immediately takes .shape of it. Naming the file that failed beats an
-    AttributeError attributed to whichever stage happened to touch it first."""
+    """cv2.imread returns None for an undecodable file; name it instead."""
     img = cv2.imread(str(path))
     if img is None:
         raise RuntimeError(f"{path.name} is not a readable image; "
@@ -200,23 +182,23 @@ def imread(path: Path):
 
 
 def gate(panos: list, params: PipelineParams) -> list:
-    """Every panorama a labeller could work with, which is nearly all of them.
-
-    This used to keep one panorama in four and call it a blur gate. What
-    survives here is the walk; what ships is decided by Select.
-    """
+    """Drop only panoramas a labeller could not work with."""
     g = params.gate
     scores = [blur.score_pano(imread(p.path), g) for p in panos]
-    return [p for p, keep in zip(panos, blur.legible(scores, g.dead)) if keep]
+    sharp = [p for p, keep in zip(panos, blur.legible(scores, g.dead)) if keep]
+    if not sharp:
+        raise RuntimeError(
+            f"the gate kept none of {len(panos)} panoramas"
+            if panos else "the stitch produced no panoramas")
+    return sharp
 
 
-def render_faces(out: Path, sharp: list, params: PipelineParams) -> list[FaceRow]:
-    """Project every sharp panorama into its faces, replacing any earlier set.
+def render_faces(out: Path, sharp: list, params: PipelineParams
+                 ) -> tuple[list[FaceRow], list[float]]:
+    """Project every sharp panorama into its faces, replacing the earlier set.
 
-    The directory is cleared first: a change to the yaws renames every face, and
-    leaving the old ones behind would put frames in the export that no manifest
-    row points at. Review decisions are keyed by face name, so they survive a
-    re-render that keeps the names and go stale on one that does not.
+    A yaw change renames every face; stale files would land in the export
+    with no manifest row.
     """
     faces_dir = out / "faces"
     shutil.rmtree(faces_dir, ignore_errors=True)
@@ -229,10 +211,7 @@ def render_faces(out: Path, sharp: list, params: PipelineParams) -> list[FaceRow
             path = faces_dir / face_name(p.index, yaw)
             cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
             records.append((p.index, p.t_sec, yaw, path))
-            # scored here because the face is already in memory, and per face
-            # rather than per panorama: an operator turning their head smears
-            # the leading face while the trailing one stays sharp, and one
-            # score for the whole sphere cannot see that
+            # per face, not per panorama: a head turn smears one face and not the next
             sharpness.append(blur.vol_score(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)))
     return records, sharpness
 
@@ -244,9 +223,7 @@ def embed_faces(out: Path, records: list[FaceRow], params: PipelineParams,
                         for _, _, _, path in chunk])
         for chunk in batched(records, EMBED_CHUNK)
     ])
-    # embeddings outlive the walk: registry dedup against re-walks, leak checks
-    # and future selection all reuse them. Cosines are only comparable between
-    # walks embedded by the same model, so the model name travels with the rows.
+    # cosines only compare across walks embedded by the same model
     atomic.atomically(out / "embeddings.npz", lambda tmp: np.savez(
         tmp, embeddings=embeddings, model=params.embed.model_name))
     return embeddings
@@ -258,14 +235,13 @@ def manifest_rows(out: Path) -> list[dict]:
 
 
 def sharp_panos(out: Path) -> list:
-    """The panoramas the gate kept last time, read back rather than re-scored."""
+    """The panoramas the last gate kept, read back from the manifest."""
     keep = {int(r["pano_idx"]) for r in manifest_rows(out)}
     return [p for p in extract.load_panos(out / "pano") if p.index in keep]
 
 
 def face_rows(out: Path) -> tuple[list[FaceRow], list[float]]:
-    """The faces already on disk, in the capture order the embeddings are in,
-    with the sharpness scored when they were rendered."""
+    """The faces on disk in manifest order, with their recorded sharpness."""
     faces_dir = out / "faces"
     rows = manifest_rows(out)
     return ([(int(r["pano_idx"]), float(r["t_sec"]), int(r["yaw"]),
@@ -273,9 +249,17 @@ def face_rows(out: Path) -> tuple[list[FaceRow], list[float]]:
             [float(r["sharpness"]) for r in rows])
 
 
+def read_json(path: Path) -> dict | list | None:
+    """None when the file is missing, unreadable or not JSON."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def read_calibration(out: Path) -> dict | None:
-    path = out / "calibration.json"
-    return json.loads(path.read_text()) if path.exists() else None
+    calib = read_json(out / "calibration.json")
+    return calib if isinstance(calib, dict) else None
 
 
 SEGMENT_FILE = "segmentation.json"
@@ -283,12 +267,7 @@ SEGMENT_FILE = "segmentation.json"
 
 def run_segment(out: Path, names: list[str], params: PipelineParams,
                 segmenter) -> dict[str, dict[str, float]]:
-    """Mask every kept face and record what each one is made of.
-
-    The mask is written as class indices, not colour, so the file is the label
-    and a palette stays a rendering choice. Only the kept faces are done: it is
-    the export that gets annotated, and inference is the expensive part.
-    """
+    """Mask every kept face; masks hold class indices, not colours."""
     masks = out / segment_mod.MASK_DIR
     shutil.rmtree(masks, ignore_errors=True)
     masks.mkdir(parents=True, exist_ok=True)
@@ -303,8 +282,6 @@ def run_segment(out: Path, names: list[str], params: PipelineParams,
         for name, seg in zip(chunk, segs):
             segment_mod.write_mask(masks / f"{Path(name).stem}.png", seg)
             classes[name] = segment_mod.shares(seg, labels)
-            # the mask holds indices, so whatever reads it needs their names;
-            # only the ones that actually turned up are worth carrying
             seen.update({str(i): labels[i] for i in np.unique(seg).tolist()
                          if i in labels})
 
@@ -315,15 +292,13 @@ def run_segment(out: Path, names: list[str], params: PipelineParams,
 
 
 def clear_segmentation(out: Path) -> None:
-    """Turning the stage off takes its output with it, or the export would
-    carry masks of a frame set that no longer exists."""
     shutil.rmtree(out / segment_mod.MASK_DIR, ignore_errors=True)
     (out / SEGMENT_FILE).unlink(missing_ok=True)
 
 
 def read_segmentation(out: Path) -> dict:
-    path = out / SEGMENT_FILE
-    return json.loads(path.read_text()) if path.exists() else {}
+    seg = read_json(out / SEGMENT_FILE)
+    return seg if isinstance(seg, dict) else {}
 
 
 RUNS_FILE = "runs.jsonl"
@@ -333,15 +308,11 @@ JOB_FILE = "job.json"
 
 
 def save_job(out: Path, first: str | None) -> None:
-    """A run is coming: written at submit, removed when the run resolves.
+    """Sentinel written at submit and removed when the run resolves.
 
-    Jobs live in the runner's memory, and two kinds of death left no other
-    trace for recover() to find. A job killed while still queued has no
-    directory at all, so the walk's video and DB row become invisible to every
-    route. A re-run killed mid-stage leaves last run's manifest.csv behind,
-    which recover() used to read as "this walk is fine" while the faces the
-    manifest points at were already half rebuilt. The sentinel outlives the
-    process, so both become one Retry click instead.
+    Jobs live in the runner's memory; this is what recover() finds after a
+    process death, for a queued job with no directory yet or a re-run killed
+    mid-stage behind a stale manifest.
     """
     out.mkdir(parents=True, exist_ok=True)
     atomic.write_json(out / JOB_FILE, {
@@ -354,17 +325,11 @@ def clear_job(out: Path) -> None:
 
 
 def read_job(out: Path) -> dict | None:
-    path = out / JOB_FILE
-    return json.loads(path.read_text()) if path.exists() else None
+    job = read_json(out / JOB_FILE)
+    return job if isinstance(job, dict) else None
 
 
 def save_failure(out: Path, stage: str, message: str, detail: str = "") -> None:
-    """Record that a run broke, next to whatever it managed to produce.
-
-    The runner holds jobs in memory, so without this a failed ingest leaves a
-    directory and a multi-gigabyte video that nothing in the app can explain
-    or remove once the server restarts.
-    """
     out.mkdir(parents=True, exist_ok=True)
     atomic.write_json(out / ERROR_FILE, {
         "stage": stage, "message": message, "detail": detail,
@@ -376,20 +341,13 @@ def clear_failure(out: Path) -> None:
 
 
 def read_failure(out: Path) -> dict | None:
-    path = out / ERROR_FILE
-    return json.loads(path.read_text()) if path.exists() else None
+    failure = read_json(out / ERROR_FILE)
+    return failure if isinstance(failure, dict) else None
 
 
 def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,
             faces: int, anchors: int, solo: int = 0,
             seconds: dict[str, float] | None = None) -> None:
-    """Append what this configuration produced.
-
-    Every run already knows its backbone, its threshold, what identical frames
-    scored under it and how much that absorbed. Without writing it down,
-    comparing two backbones means keeping the numbers on paper: the walk on
-    disk only ever shows the last one that ran.
-    """
     ref = (calib or {}).get("reference", {})
     far = (calib or {}).get("far", {})
     row = {
@@ -400,30 +358,32 @@ def log_run(out: Path, params: PipelineParams, calib: dict | None, first: str,
         "rule": params.dedup.rule,
         "reference": ref.get("median", 0),
         "pairs": ref.get("n", 0),
-        # what the threshold was actually placed against, and the risk it was
-        # placed at: without these a row cannot say why tau was that number
         "farPairs": far.get("n", 0),
         "farP99": far.get("p99", 0),
         "falseMergePct": params.calib.false_merge_pct,
         "faces": faces,
         "anchors": anchors,
         "absorbed": faces - anchors,
-        # groups of one this run refused as unusable: a coverage cost, so it
-        # belongs beside what the run produced rather than nowhere
         "solo": solo,
-        # what it cost, per stage: the other half of what a run produced
         "seconds": seconds or {},
     }
-    with open(out / RUNS_FILE, "a") as f:
-        f.write(json.dumps(row) + "\n")
+    path = out / RUNS_FILE
+    lines = path.read_text().splitlines() if path.exists() else []
+    lines = [ln for ln in lines if ln] + [json.dumps(row)]
+    atomic.write_text(path, "\n".join(lines[-RUNS_KEPT:]) + "\n")
 
 
 def read_runs(out: Path, limit: int = RUNS_KEPT) -> list[dict]:
-    """The most recent runs, newest first."""
+    """Newest first; undecodable lines are skipped."""
     path = out / RUNS_FILE
     if not path.exists():
         return []
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line]
+    rows = []
+    for line in path.read_text().splitlines():
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
     return rows[::-1][:limit]
 
 
@@ -432,23 +392,16 @@ def save_calibration(out: Path, calib: dict) -> None:
 
 
 def can_requantile(out: Path) -> bool:
-    """Whether the budget can be moved by re-reading rather than re-measuring.
-
-    It needs the far cosines the record stores. A walk whose calibration was
-    written without them has nothing to re-read, and re-resolving from an
-    empty array would quietly answer "no threshold" for a walk that has one.
-    """
+    """True if the record stores the far cosines needed to re-derive tau."""
     calib = read_calibration(out)
     return bool(calib and calib.get("far", {}).get("cosines"))
 
 
 def requantile(out: Path, params: PipelineParams) -> dict:
-    """Move the false-merge budget without measuring anything again.
+    """Re-derive tau from the stored far cosines under a new false-merge budget.
 
-    Both distributions are already on disk; the budget is a percentile over
-    the far cosines, not a new measurement. So this costs a sort, and the knob
-    can be explored instead of committed to. Changing far_seconds is not this:
-    that redraws which pairs count as elsewhere, and needs the embeddings.
+    Changing far_seconds is not covered: that redraws the pair set and needs
+    the embeddings.
     """
     calib = read_calibration(out)
     if calib is None:
@@ -462,14 +415,13 @@ def requantile(out: Path, params: PipelineParams) -> dict:
 
 
 def apply_rule(params: PipelineParams, calib: dict | None) -> PipelineParams:
-    """Under the calibrated rule the threshold comes from the measurement, so
-    tau always holds the number that actually ran.
-
-    A walk too short to have a far distribution has no measured threshold, and
-    saying so beats writing the default in and calling it calibrated.
-    """
-    if params.dedup.rule != "calibrated" or not calib:
+    """Under the calibrated rule, tau is the measured threshold."""
+    if params.dedup.rule != "calibrated":
         return params
+    if not calib:
+        raise ValueError("this walk has no calibration record to take a "
+                         "threshold from. Use the fixed rule, or re-run from "
+                         "calibrate.")
     tau = calib.get("tau")
     if tau is None:
         raise ValueError(
@@ -481,15 +433,10 @@ def apply_rule(params: PipelineParams, calib: dict | None) -> PipelineParams:
 
 def write_manifest(path: Path, faces_out: list[tuple[int, float, int, str]],
                    result, sharpness: list[float]) -> None:
-    """One row per face in capture order, with the group it landed in.
+    """One row per face in capture order; faces_out is (pano_idx, t_sec, yaw, name).
 
-    faces_out is (pano_idx, t_sec, yaw, file name); the dedup result supplies
-    kept / anchor / cosine. Shared by the full run and by a re-select, so the
-    two can never disagree about the manifest's shape.
-
-    There is no separate column for the frame a group exports. Dedup visits
-    sharpest first, so the anchor is that frame. A reviewer's override is a
-    different question and is stored apart from this file.
+    The anchor is the group's exported frame (dedup visits sharpest first);
+    reviewer overrides live in the store, not here.
     """
     kept = set(result.kept)
 
@@ -505,32 +452,116 @@ def write_manifest(path: Path, faces_out: list[tuple[int, float, int, str]],
                 w.writerow([pano_idx, f"{t_sec:.1f}", yaw, name, int(i in kept),
                             anchor, cos, f"{sharpness[i]:.2f}"])
 
-    # this file is the walk: sharp_panos and face_rows both rebuild the stages
-    # above from it, so a half-written one does not lose the selection, it
-    # loses everything the stitch paid for
+    # sharp_panos and face_rows rebuild the upstream stages from this file
     atomic.atomically(path, rows)
 
 
 def save_params(out: Path, params: PipelineParams) -> None:
-    """The settings this walk's frames were built with, next to the frames."""
     atomic.write_json(out / "params.json", asdict(params), indent=1)
+
+
+# params section -> the stage a change to it re-runs from
+STAGE_OF = {"gate": "gate", "faces": "faces", "embed": "embed",
+            "calib": "calibrate", "dedup": "select", "segment": "segment"}
+
+
+def merge(params: PipelineParams, patch: dict[str, dict]
+          ) -> tuple[PipelineParams, str | None, set[str]]:
+    """Fold {section: {field: value}} into params.
+
+    Returns (new params, earliest stage invalidated, "section.field" names
+    that differ from the walk's).
+    """
+    changed: set[str] = set()
+    for section, fields in patch.items():
+        current = getattr(params, section)
+        # JSON has no tuples; the params dataclasses do
+        fields = {k: (tuple(v) if isinstance(v, list) else v)
+                  for k, v in fields.items() if v is not None}
+        fields = {k: v for k, v in fields.items() if getattr(current, k) != v}
+        if not fields:
+            continue
+        params = replace(params, **{section: replace(current, **fields)})
+        changed.update(f"{section}.{k}" for k in fields)
+    stages = {STAGE_OF[f.split(".")[0]] for f in changed}
+    return params, min(stages, key=STAGES.index, default=None), changed
+
+
+def walk_params(out: Path) -> PipelineParams:
+    """The params the walk was built with; defaults if none were saved."""
+    saved = read_json(out / "params.json")
+    return from_dict(saved) if isinstance(saved, dict) else PipelineParams()
+
+
+def embed_model_used(out: Path) -> str:
+    npz = out / "embeddings.npz"
+    if not npz.exists():
+        return ""
+    with np.load(npz) as data:
+        return str(data["model"])
+
+
+def pipeline_spec(out: Path) -> dict:
+    """The walk's params plus the embedder recorded in the npz."""
+    return dict(asdict(walk_params(out)), embed_model_used=embed_model_used(out),
+                backbones=list(BACKBONES), segmenters=SEGMENTERS,
+                site_classes=list(SITE_CLASSES))
+
+
+def top_classes(classes: dict[str, dict], n: int = 6) -> list[dict]:
+    """Each class's mean share over all segmented frames, largest first."""
+    if not classes:
+        return []
+    totals: dict[str, float] = {}
+    for shares in classes.values():
+        for name, share in shares.items():
+            totals[name] = totals.get(name, 0.0) + share
+    frames = len(classes)
+    ranked = sorted(totals.items(), key=lambda kv: -kv[1])[:n]
+    return [{"name": k, "share": round(v / frames, 3)} for k, v in ranked]
+
+
+def stage_counts(out: Path, rows: list[dict], state: dict,
+                 runs: list[dict]) -> dict:
+    """Per-stage counts for the pipeline view; `runs` is read_runs(out)."""
+    src = read_json(out / "source.json")
+    src = src if isinstance(src, dict) else {}
+    anchors = sum(1 for r in rows if r["kept"] == "1")
+    dropped, overridden = review_counts(rows, state)
+    calib = read_calibration(out) or {}
+    seg_classes = read_segmentation(out).get("classes", {})
+    return {
+        "frames": src.get("frames", 0),
+        "seconds": src.get("seconds", 0),
+        "source": f"{src['width']}x{src['height']}" if "width" in src else "",
+        "lenses": src.get("lenses", 0),
+        "panos": len(list((out / "pano").glob(
+            f"{extract.PANO_PREFIX}*{extract.PANO_EXT}"))),
+        "sharp": len({r["pano_idx"] for r in rows}),
+        "faces": len(rows),
+        "pairs": calib.get("reference", {}).get("n", 0),
+        "reference": calib.get("reference", {}).get("median", 0),
+        "farPairs": calib.get("far", {}).get("n", 0),
+        "calibTau": calib.get("tau") or 0,
+        "segmented": len(seg_classes),
+        "classMix": top_classes(seg_classes),
+        "anchors": anchors,
+        "absorbed": len(rows) - anchors,
+        # a dropped solo leaves no manifest row, so this comes from the run record
+        "solo": (runs or [{}])[0].get("solo", 0),
+        "dropped": dropped,
+        "overridden": overridden,
+        "kept": anchors - dropped,
+    }
 
 
 def select(embeddings: np.ndarray, named: list, sharpness: list,
            params: PipelineParams) -> tuple:
-    """Which faces ship.
-
-    One function because there are two ways in, the full run and reselect's
-    fast path, and a rule that lived in only one of them would mean the cheap
-    re-run quietly disagreed with the expensive one.
-
-    Returns (result, how many groups of one were dropped for being smeared).
-    """
+    """Dedup plus the solo drop. Returns (result, groups of one dropped)."""
     scores = np.asarray(sharpness, dtype=float)
     result = greedy_dedup(embeddings, params.dedup, scores,
                           np.array([p for p, _, _, _ in named]))
-    # the one place a sharpness threshold belongs: a group of one is its own
-    # anchor, so there is no sharper member for it to be represented by
+    # a group of one has no sharper member to stand in for it
     ratio = blur.heading_ratio(scores,
                                np.array([y for _, _, y, _ in named]),
                                np.array([t for _, t, _, _ in named]),
@@ -541,20 +572,10 @@ def select(embeddings: np.ndarray, named: list, sharpness: list,
 
 
 def reselect(walk_out: Path, params: PipelineParams) -> dict:
-    """Re-run selection alone, from the embeddings already on disk.
+    """Re-run selection from the embeddings on disk.
 
-    Everything upstream of Select is unchanged by a threshold, so this costs
-    a dedup pass and a manifest rewrite rather than a stitch and a GPU pass.
-    Face files and their names are untouched, which is what lets review
-    decisions (keyed by name) survive the change.
-
-    Downstream is a different matter: the masks belong to the frames the last
-    run picked, and this changes which those are. Leaving them made the record
-    describe a set that no longer exists, so the masks page listed frames that
-    were no longer kept and 404ed on every one, `segmented` counted frames with
-    no mask behind it, and build_zip's `if mask.exists()` shipped a partly
-    annotated dataset without saying so. Clearing is honest and re-running
-    segment is cheap next to being wrong.
+    Face files keep their names, so review decisions survive. Masks belong
+    to the previous kept set and are cleared.
     """
     with np.load(walk_out / "embeddings.npz") as data:
         embeddings = data["embeddings"]

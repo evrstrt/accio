@@ -1,9 +1,8 @@
 """Background work: one worker thread, a queue of walks.
 
-Jobs wrap jobs.pipeline with status the UI polls. One worker on purpose: the
-embedder holds the GPU, and two emulated MediaSDK containers at once help
-nobody on a laptop. A settings change queues here too rather than blocking a
-request, because re-running from Gate re-renders and re-embeds every face.
+One worker: the embedder holds the GPU, and two emulated MediaSDK containers
+at once do not fit on a laptop. Settings changes queue here too, since a
+re-run from the gate re-renders and re-embeds every face.
 """
 
 import itertools
@@ -27,12 +26,9 @@ class Job:
     walkId: str
     status: str = "queued"   # queued | running | done | error
     error: str = ""
-    video: Path = field(default=Path(), repr=False)
-    # the stage a re-run enters at; None for a fresh ingest, which runs it all
-    first: str | None = None
+    video: Path | None = field(default=None, repr=False)
+    first: str | None = None  # re-run entry stage; None for a fresh ingest
     params: PipelineParams | None = field(default=None, repr=False)
-    # per-stage state and the counts each one emitted, so the canvas can show
-    # the run advancing rather than one opaque wait
     stages: dict[str, str] = field(
         default_factory=lambda: {s: "queued" for s in STAGES})
     stats: dict[str, int] = field(default_factory=dict)
@@ -43,9 +39,10 @@ class Job:
                 "stage": running, "stages": dict(self.stages),
                 "stats": dict(self.stats), "error": self.error,
                 "first": self.first or "",
-                # the settings this run is using, which are not the ones saved
-                # next to the walk until it finishes
                 "params": asdict(self.params) if self.params else None}
+
+
+JOBS_KEPT = 50
 
 
 class Runner:
@@ -54,28 +51,22 @@ class Runner:
         self.params = params or PipelineParams()
         self._embedders: dict[str, Embedder] = {}
         self._segmenters: dict[str, Segmenter] = {}
+        # submit() runs on request threads while busy() and list() iterate
+        self._jobs_lock = threading.Lock()
         self.jobs: dict[int, Job] = {}
         self._ids = itertools.count(1)
         self._q: queue.Queue[Job] = queue.Queue()
         self.recover()
-        threading.Thread(target=self._work, daemon=True).start()
+        self._thread = threading.Thread(target=self._work, daemon=True)
+        self._thread.start()
 
     def recover(self) -> None:
-        """Mark walks whose run the process did not survive.
+        """Write a failure for walks whose run the process did not survive.
 
-        Only the except block writes error.json, so a SIGKILL, an OOM or a
-        closed laptop leaves a walk with panoramas, no manifest and no failure.
-        Every route then refuses it: rerun 409s with "has no frames", retry
-        409s with "no failure to retry", and the canvas shows every stage
-        queued forever. The one action that works is Delete, which also unlinks
-        the multi-gigabyte original. Writing the failure down turns that into
-        one Retry click.
-
-        The stage recorded is what Retry re-enters at, so it is worth getting
-        right: panos.json is written at the end of the stitch, so its presence
-        means the expensive part is done and the retry starts at the gate. Its
-        absence means the kill landed inside the stitch, where the half-written
-        export is still digit-named and genuinely does get reused.
+        Only the except block in _run_one writes error.json; a SIGKILL or OOM
+        leaves nothing. The recorded stage is where Retry re-enters: the pano
+        index is written at the end of the stitch, so its absence means the
+        kill landed inside the stitch.
         """
         if not self.out_root.exists():
             return
@@ -84,11 +75,7 @@ class Runner:
                 continue
             job = read_job(walk)
             if job is not None:
-                # a sentinel that outlived the process is a queued or running
-                # job the process took with it. Its stage is where a re-run
-                # entered ('' for a fresh ingest, which falls through to the
-                # heuristic below); Retry re-enters there and reuses the disk
-                # state above it, stale manifest included.
+                # '' is a fresh ingest, which falls through to the pano check
                 stitched = (walk / "pano" / extract.PANO_INDEX).exists()
                 save_failure(
                     walk, job.get("stage")
@@ -102,8 +89,7 @@ class Runner:
                 continue
             if (walk / "manifest.csv").exists() or (walk / ERROR_FILE).exists():
                 continue
-            # walks from before the sentinel existed: a fresh ingest that died
-            # mid-run left panoramas, no manifest and no failure
+            # walks from before the job sentinel existed
             stitched = (walk / "pano" / extract.PANO_INDEX).exists()
             save_failure(
                 walk, "gate" if stitched else "stitch",
@@ -115,37 +101,24 @@ class Runner:
                    "from the stitch, reusing whatever frames already landed."))
 
     def embedder(self, params: PipelineParams) -> Embedder:
-        """One embedder per backbone, kept between jobs.
-
-        Per backbone, not one for the runner: a job that asked for a different
-        model would otherwise embed with the loaded one and record the name it
-        asked for, which is a lie no downstream check would catch. Weights load
-        on first use, so naming a backbone costs nothing until it runs.
-        """
+        """One embedder per backbone, kept between jobs; weights load on first use."""
         name = params.embed.model_name
         if name not in self._embedders:
             self._embedders[name] = TimmEmbedder(params.embed)
         return self._embedders[name]
 
     def segmenter(self, params: PipelineParams) -> Segmenter | None:
-        """The current segmenter, and none at all until a walk asks for one:
-        the weights are a few hundred megabytes nobody should pay for by
-        default.
+        """At most one segmenter is held; Grounding DINO plus SAM ViT-H is ~2.4 GB.
 
-        Exactly one is held. The key includes the classes, because an
-        open-vocabulary model resolves its prompt into token spans when it
-        loads, so a different vocabulary is a different segmenter whatever its
-        weights are. Keeping them all was the problem: Grounding DINO plus SAM
-        ViT-H is around 2.4 GB, and editing the class list is the entire point
-        of an open-vocabulary model, so the workflow it exists for was the one
-        that allocated until the device ran out.
+        The key includes the classes: an open-vocabulary model resolves its
+        prompt into token spans at load time.
         """
         if not params.segment.enabled:
             return None
         name = params.segment.model_name
         key = f"{name}|{'|'.join(params.segment.classes)}"
         if key not in self._segmenters:
-            self._segmenters.clear()          # drop the old weights first
+            self._segmenters.clear()
             self._free_device()
             self._segmenters[key] = (
                 OpenVocabSegmenter(params.segment) if params.segment.kind == "open"
@@ -154,8 +127,7 @@ class Runner:
 
     @staticmethod
     def _free_device() -> None:
-        """Dropping the reference is not enough on an accelerator: the caching
-        allocator keeps the blocks until it is told otherwise."""
+        """The caching allocator keeps blocks after the reference is dropped."""
         try:
             import gc
 
@@ -166,39 +138,55 @@ class Runner:
             elif torch.backends.mps.is_available():
                 torch.mps.empty_cache()
         except Exception:
-            pass          # freeing is an optimisation; never fail a run for it
+            pass
 
-    def submit(self, video: Path, first: str | None = None,
+    def submit(self, video: Path | None, first: str | None = None,
                params: PipelineParams | None = None, walk_id: str = "") -> Job:
-        """A fresh ingest (first=None) or a re-run entering at `first`."""
+        """A fresh ingest (first=None) or a re-run entering at `first`.
+
+        `video` may be None for a re-run of a stage that does not read it.
+        """
+        if video is None and not (walk_id and first):
+            raise ValueError("a job without a video needs a walk id and a stage")
         job = Job(id=next(self._ids), walkId=walk_id or video.stem, video=video,
                   first=first, params=params)
-        # on disk before it is in the queue: a job the process dies holding
-        # otherwise leaves a video and a DB row nothing can list or retry
+        # on disk before it is queued, so a process death leaves a trace
         save_job(self.out_root / job.walkId, first)
-        self.jobs[job.id] = job
+        with self._jobs_lock:
+            self.jobs[job.id] = job
+            self._prune()
         self._q.put(job)
         return job
 
+    def _prune(self) -> None:
+        finished = [j.id for j in self.jobs.values()
+                    if j.status not in ("queued", "running")]
+        for jid in sorted(finished)[:-JOBS_KEPT]:
+            del self.jobs[jid]
+
     def busy(self, walk_id: str) -> bool:
-        return any(j.walkId == walk_id and j.status in ("queued", "running")
-                   for j in self.jobs.values())
+        with self._jobs_lock:
+            return any(j.walkId == walk_id and j.status in ("queued", "running")
+                       for j in self.jobs.values())
 
     def list(self) -> list[dict]:
-        return [j.public() for j in sorted(self.jobs.values(), key=lambda j: -j.id)]
+        with self._jobs_lock:
+            jobs = sorted(self.jobs.values(), key=lambda j: -j.id)
+        return [j.public() for j in jobs]
+
+    def alive(self) -> bool:
+        return self._thread.is_alive()
 
     def _work(self) -> None:
-        # the loop must outlive anything inside it. The handler below writes to
-        # disk, and the likeliest reason a run failed is that the disk is full,
-        # which makes the handler fail too. That used to kill the thread, and
-        # then submit() kept accepting work that nothing would ever pick up:
-        # every walk sat queued forever with no error and no clue, until
-        # somebody thought to restart the server.
+        # a failing handler (disk full) must not kill the worker thread
         while True:
+            job = self._q.get()
             try:
-                self._run_one(self._q.get())
+                self._run_one(job)
             except Exception:
                 traceback.print_exc()
+            finally:
+                self._q.task_done()
 
     def _run_one(self, job: Job) -> None:
         job.status = "running"
@@ -221,16 +209,14 @@ class Runner:
             job.status = "done"
         except Exception as e:
             job.status = "error"
-            job.error = traceback.format_exc(limit=2)
+            # negative: the innermost frames, where the failing line is
+            job.error = traceback.format_exc(limit=-8)
+            broke = ""
             for stage, state in job.stages.items():
                 if state == "running":
                     job.stages[stage] = "error"
-            # on disk too: jobs live in memory, the walk does not
-            broke = next((s for s, st in job.stages.items()
-                          if st == "error"), "")
+                    broke = broke or stage
             save_failure(self.out_root / job.walkId, broke, str(e) or
                          type(e).__name__, job.error)
         finally:
-            # resolved either way: error.json or the run's own output now
-            # says what recover() would otherwise have to guess
             clear_job(self.out_root / job.walkId)
