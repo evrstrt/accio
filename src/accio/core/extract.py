@@ -1,16 +1,12 @@
-"""Stage 1: dual-fisheye .insv -> decimated equirect panorama JPEGs.
+"""Dual-fisheye .insv -> equirect panorama JPEGs, via the Insta360 MediaSDK
+container.
 
-The Insta360 MediaSDK container does the stitch (replaces ffmpeg v360, which
-seamed from a nominal lens FOV and left parallax at yaw +-90). The SDK reads
-the factory calibration in the .insv and optical-flow blends the lens seams;
--enable_flowstate additionally gyro-levels the horizon (the helmet cam tilts
-with the wearer's head). Only the frames we keep are exported, via
--export_frame_index, which replaces the old fps-filter decimation and skips
-stitching the ~93% of frames we would throw away.
+The SDK reads the factory calibration in the .insv and optical-flow blends the
+lens seams; -enable_flowstate gyro-levels the horizon. Only the decimated
+frames are exported, via -export_frame_index.
 
-Frame identity lives in pano_name()/pano_index(): filenames are a projection
-of the frame index, never the other way around. The store and export layers
-import these instead of re-parsing filenames.
+Filenames are a projection of the frame index (pano_name/pano_index); other
+layers import these rather than parsing names.
 """
 
 import json
@@ -30,15 +26,13 @@ PANO_PREFIX = "pano_"
 PANO_EXT = ".jpg"
 PANO_INDEX = "panos.json"
 
-JPEG_EOI = b"\xff\xd9"       # every finished JPEG ends with this
-SDK_POLL = 2.0               # how often the stitch checks on itself
-SDK_STALL = 300.0            # no new frame for this long: it is stuck, not slow
-# a backstop under the stall detector, for a container that writes a frame just
-# often enough to look alive. Measured 0.41-0.78 s per panorama, so this is
-# roughly four times the worst rate seen plus room for a cold start.
+JPEG_EOI = b"\xff\xd9"
+SDK_POLL = 2.0
+SDK_STALL = 300.0            # no new frame for this long means stuck
+# backstop under the stall detector; measured 0.41-0.78 s per panorama
 SDK_CAP_PER_FRAME = 3.0
 SDK_CAP_FLOOR = 600.0
-SDK_KILL_GRACE = 10.0        # then stop waiting on the client and kill it too
+SDK_KILL_GRACE = 10.0
 
 
 def pano_name(index: int) -> str:
@@ -71,26 +65,20 @@ def probe(video: Path) -> tuple[float, int, int, int]:
     ran = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=avg_frame_rate,width,height:format=duration",
-         "-of", "csv=p=0", str(video)],
+         "-of", "json", str(video)],
         capture_output=True, text=True)
     if ran.returncode:
         raise RuntimeError(f"{video.name} is not a video ffprobe can read: "
                            f"{ran.stderr.strip()[:300] or 'no video stream'}")
-    out = ran.stdout.split()
-    # Wrong file types get this far: ffprobe exits 0 on a container with no
-    # video stream, and answers "0/0" or "N/A" for what it cannot measure.
-    # Those are the operator picking the wrong file, so they get the file's
-    # name back, not a parse error from inside ingest.
+    # ffprobe exits 0 on a container with no video stream and answers "0/0" or "N/A"
     try:
-        # first three, not all of them: ffprobe's csv writer emits a trailing
-        # empty column for some containers (an mp4 here, not the .insv beside
-        # it), and unpacking the whole split turned that into "too many values
-        # to unpack"
-        width, height, rate = out[0].split(",")[:3]
-        num, den = rate.split("/")
+        info = json.loads(ran.stdout)
+        stream = info["streams"][0]
+        num, den = stream["avg_frame_rate"].split("/")
         fps = float(num) / float(den)
-        return fps, int(float(out[1]) * fps), int(width), int(height)
-    except (IndexError, ValueError, ZeroDivisionError) as e:
+        return (fps, int(float(info["format"]["duration"]) * fps),
+                int(stream["width"]), int(stream["height"]))
+    except (KeyError, IndexError, ValueError, ZeroDivisionError) as e:
         raise RuntimeError(f"{video.name} has no video stream ffprobe can "
                            "measure; is it a video?") from e
 
@@ -100,24 +88,21 @@ def probe_fps_nframes(video: Path) -> tuple[float, int]:
     return fps, frames
 
 
-# Insta360 appends its own trailer after the MP4, ending in this marker. The
-# records inside are protobuf-shaped: field 1 the serial, field 2 the model,
-# field 3 the firmware. Reading them beats asking the operator to type
-# "Insta360 X3" correctly, and it is the only place the camera is recorded.
+# Insta360 appends a trailer after the MP4 ending in this marker. Its records
+# are protobuf-shaped: field 1 serial, field 2 model, field 3 firmware.
 TRAILER_MAGIC = b"8db42d694ccc418790edff439fe026bf"
-TRAILER_SCAN = 2_000_000     # the record sits ~2 KB from the end; read wide
+TRAILER_SCAN = 2_000_000     # the record sits ~2 KB from the end
 
 
 def camera(video: Path) -> dict:
-    """Model, serial and firmware of the camera that shot this, or {}."""
+    """Model, serial and firmware from the .insv trailer, or {}."""
     size = video.stat().st_size
     with open(video, "rb") as f:
         f.seek(-min(size, TRAILER_SCAN), 2)
         tail = f.read()
     if not tail.endswith(TRAILER_MAGIC):
         return {}
-    # The three fields sit in one record, so the model anchors it: the tags
-    # alone match binary gyro data all over the trailer.
+    # the model anchors the record: the tags alone match gyro data all over the trailer
     at = re.search(rb"\x12([\x01-\x40])(Insta360 [ -~]{0,32})", tail)
     if at is None:
         return {}
@@ -127,15 +112,14 @@ def camera(video: Path) -> dict:
     out = {"model": model.decode()}
 
     def field(tag: bytes, start: int) -> str:
-        """One length-delimited string at `start`, if that is where it is."""
+        """Length-delimited string at `start` if its tag matches, else ""."""
         if start < 0 or tail[start:start + 1] != tag:
             return ""
         n = tail[start + 1]
         value = tail[start + 2:start + 2 + n]
         return value.decode() if re.fullmatch(rb"[ -~]+", value or b"") else ""
 
-    # the serial is the field that ends where the model's tag begins, and the
-    # firmware is the one that starts after the model
+    # the serial ends where the model's tag begins; the firmware starts after the model
     for n in range(1, 33):
         start = at.start() - n - 2
         if tail[start:start + 1] == b"\x0a" and tail[start + 1] == n:
@@ -145,9 +129,8 @@ def camera(video: Path) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
-# VID_20260728_114811_..., the camera's own local clock. The container's
-# creation_time is UTC (06:18 for this 11:48 walk), and a site cares which
-# hour of its own day the walk happened, so the name wins when it parses.
+# VID_20260728_114811_...: the camera's local clock. The container's
+# creation_time is UTC, so the name wins when it parses.
 NAME_STAMP = re.compile(r"VID_(\d{8})_(\d{6})_")
 
 
@@ -165,13 +148,9 @@ def recorded_at(video: Path) -> str:
 
 
 def lenses_in_frame(width: int, height: int) -> int:
-    """How many fisheye circles a frame holds.
+    """2 for circles side by side (3840x1920), 1 for one circle per file (2880x2880).
 
-    Both packings are dual-fisheye; they differ in how they are stored. Two
-    circles side by side make a 2:1 frame (3840x1920), one circle per file
-    makes a square one (2880x2880). A square frame is therefore half a
-    recording, and stitching it alone stretches the front hemisphere over the
-    whole sphere: the back of every panorama comes out a smear.
+    A square frame is half a recording; stitched alone, the back hemisphere is a smear.
     """
     return 2 if width >= height * 1.5 else 1
 
@@ -183,8 +162,7 @@ def frame_numbers(native_fps: float, nframes: int, target_fps: float) -> list[in
 
 
 def lens_files(video: Path) -> list[Path]:
-    """Newer X-series cameras write each lens to its own file: _00_ (front) has a
-    _10_ (back) sibling. Older cameras (X3) pack both lenses in the one file."""
+    """Newer X-series cameras write the back lens to a _10_ sibling of the _00_ file."""
     if "_00_" in video.name:
         sib = video.with_name(video.name.replace("_00_", "_10_"))
         if sib.exists():
@@ -193,18 +171,16 @@ def lens_files(video: Path) -> list[Path]:
 
 
 def front_lens(paths: list[Path]) -> Path:
-    """The file whose stem names the walk: the _00_ (front) file of a dual-file
-    recording, or the single file of an older camera."""
+    """The _00_ file of a dual-file recording, else the single file."""
     return next((p for p in paths if "_00_" in p.name), paths[0])
 
 
 def sdk_cmd(video: Path, pano_dir: Path, frame_nos: list[int], cname: str,
             params: ExtractParams) -> list[str]:
-    # The example binary's -inputs parser reads args until the next dash, so
-    # -inputs must not be last.
+    # the example binary's -inputs parser reads args until the next dash, so it
+    # cannot be last
     inputs = [f"/in/{p.name}" for p in lens_files(video)]
-    # host_path, not the paths we hold: this command is executed by the host's
-    # daemon, which cannot see inside our container. See accio.settings.
+    # host paths: the host's daemon cannot see inside our container (see accio.settings)
     return ["docker", "run", "--rm", "--platform=linux/amd64",
             "--name", cname,
             "-v", f"{settings.host_path(video.parent)}:/in:ro",
@@ -221,13 +197,10 @@ def sdk_cmd(video: Path, pano_dir: Path, frame_nos: list[int], cname: str,
 
 
 def whole_jpeg(path: Path) -> bool:
-    """A JPEG that was finished, not one a killed container left half-written.
+    """Ends with the end-of-image marker; a killed container leaves truncated files.
 
-    Every JPEG ends with the end-of-image marker, so its absence is exactly the
-    truncated case. Checking only that the file exists let a partial frame
-    satisfy the completeness check below; the stitch then reported success and
-    cv2.imread returned None three stages later, where it read as a Gate bug
-    and no retry could ever clear it.
+    A truncated frame that passed on existence alone surfaced as cv2.imread
+    returning None three stages later.
     """
     try:
         with open(path, "rb") as f:
@@ -240,16 +213,11 @@ def whole_jpeg(path: Path) -> bool:
 
 
 def run_sdk(cmd: list[str], cname: str, done, stall: float, cap: float) -> str:
-    """Run the container until the frames land, it exits, or it stops making
-    progress. Returns "" on success, else why it failed.
+    """Run the container until the frames land, it exits, or it stalls.
+    Returns "" on success, else why it failed.
 
-    Waiting for the process to exit is the wrong condition: the SDK regularly
-    writes every frame and then hangs in emulation teardown, so the work is
-    done long before the wait is. Waiting on the frames instead turns that hang
-    into a no-op. And the deadline is a stall rather than a total, because a
-    total has to be guessed from the frame count: the old 120 + 4n gave a
-    thirty-minute walk about nine hours across two attempts, on the one worker
-    thread, with nothing able to cancel it.
+    Waits on the frames, not the process: the SDK often writes every frame and
+    then hangs in emulation teardown.
     """
     with tempfile.TemporaryFile() as err:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err)
@@ -275,8 +243,7 @@ def run_sdk(cmd: list[str], cname: str, done, stall: float, cap: float) -> str:
             try:
                 proc.wait(timeout=SDK_KILL_GRACE)
             except subprocess.TimeoutExpired:
-                # the kill did not take, or the client did not notice. Waiting
-                # on it here would undo the deadline we just enforced.
+                # the kill did not take; waiting longer would undo the deadline
                 proc.kill()
                 proc.wait()
         err.seek(0)
@@ -285,12 +252,10 @@ def run_sdk(cmd: list[str], cname: str, done, stall: float, cap: float) -> str:
     if done() is True:
         return ""
     if gave_up:
-        # our own signal is on proc.returncode by now, so ask the flag rather
-        # than the code, or giving up reads as "MediaSDK exited -9"
+        # returncode carries our own kill signal by now
         return "MediaSDK stopped making progress" + (f": {tail}" if tail else "")
     if proc.returncode:
-        # the common one is not a bad video: it is Docker Desktop not running,
-        # which exits 125 and used to surface as a frame count
+        # Docker Desktop not running exits 125
         return f"MediaSDK exited {proc.returncode}" + (f": {tail}" if tail else "")
     return "MediaSDK exited cleanly without exporting every frame" + (
         f": {tail}" if tail else "")
@@ -310,28 +275,24 @@ def stitch(video: Path, pano_dir: Path, params: ExtractParams) -> list[PanoFrame
                 if p.stem.isdigit() and whole_jpeg(p)}
 
     def landed():
-        """True once every requested frame is in, else how many are, so the
-        caller can tell "slow" from "stuck"."""
+        """True once every requested frame is in, else the count so far."""
         have = set(digit_jpgs())
         return True if set(frame_nos) <= have else len(have)
 
-    # A prior killed run may already have left a complete export behind, in
-    # which case there is nothing to do.
+    # a prior killed run may have left a complete export
     if landed() is not True:
         cname = "sdk-" + re.sub(r"[^a-zA-Z0-9_.-]", "", video.stem)
         cap = SDK_CAP_PER_FRAME * len(frame_nos) + SDK_CAP_FLOOR
         for attempt in (1, 2):
-            # a container that has not finished dying holds the name, and the
-            # retry would fail on that rather than on whatever went wrong
+            # a container still dying holds the name
             subprocess.run(["docker", "rm", "-f", cname], capture_output=True)
             why = run_sdk(sdk_cmd(video, pano_dir, frame_nos, cname, params),
                           cname, landed, SDK_STALL, cap)
             if not why:
                 break
             if attempt == 2:
-                # Nothing at all came out, which reads the same whether the
-                # video was unreadable or the container mounted an empty
-                # directory where the video should have been. Ask.
+                # no output at all looks the same for an unreadable video and
+                # an empty mount
                 mount = (settings.mount_check(params.sdk_image)
                          if not digit_jpgs() else "")
                 raise RuntimeError(
@@ -339,6 +300,11 @@ def stitch(video: Path, pano_dir: Path, params: ExtractParams) -> list[PanoFrame
                     f"frames for {video.name}."
                     + (f"\n{mount}" if mount else ""))
 
+    # an earlier run at another fps leaves digit-named frames this one did not ask for
+    wanted = set(frame_nos)
+    for p in pano_dir.glob("*.jpg"):
+        if p.stem.isdigit() and int(p.stem) not in wanted:
+            p.unlink()
     exported = digit_jpgs()
     frames = []
     for index, frame_no in enumerate(sorted(exported)):
@@ -350,12 +316,8 @@ def stitch(video: Path, pano_dir: Path, params: ExtractParams) -> list[PanoFrame
 
 
 def save_panos(pano_dir: Path, frames: list[PanoFrame]) -> None:
-    """Record which source frame each panorama came from.
-
-    A timestamp cannot be re-derived from the file name without re-deriving the
-    decimation, and it is what calibration times its neighbour frames off. So
-    the stitch writes it down and every later stage reads it instead of guessing.
-    """
+    """Record each panorama's source timestamp; calibration times its
+    reference frames off it."""
     atomic.write_json(pano_dir / PANO_INDEX,
                       [{"index": f.index, "tSec": f.t_sec} for f in frames])
 

@@ -12,8 +12,9 @@ import numpy as np
 import piexif
 import piexif.helper
 
-from accio.core.export import (build_zip, effective_picks, export_name,
-                               name_prefix, review_counts, slug, stamp_exif)
+from accio.core.export import (MANIFEST_FIELDS, effective_picks, export_name,
+                               name_prefix, review_counts, slug, stamp_exif,
+                               write_zip)
 from accio.core.params import PipelineParams
 
 ROWS = [  # two kept anchors; row 1 is absorbed into 0, and 0 is the sharper
@@ -44,44 +45,37 @@ def test_effective_picks_defaults_swaps_and_drops():
     assert [p for _, p, _ in effective_picks(ROWS, DROP)] == [0]
 
 
-def test_the_default_pick_is_the_anchor():
-    """Dedup visits sharpest first, so the anchor already is the frame worth
-    labelling and there is no second choice for the export to make."""
+def test_default_pick_is_anchor():
     assert [(a, p) for a, p, _ in effective_picks(ROWS, {})] == [(0, 0), (2, 2)]
 
 
-def test_a_human_overrides_the_anchor():
+def test_human_pick_overrides_anchor():
     assert [p for _, p, _ in effective_picks(ROWS, SWAP)] == [1, 2]
     back = {"y045_00000.jpg": {"pick": "y045_00000.jpg", "dropped": False}}
     assert [p for _, p, _ in effective_picks(ROWS, back)] == [0, 2]
 
 
-def test_choosing_the_anchor_again_is_not_an_override():
-    """Only moving off it counts, or the funnel reports swaps nobody made."""
+def test_picking_anchor_not_override():
     same = {"y045_00000.jpg": {"pick": "y045_00000.jpg", "dropped": False}}
     assert review_counts(ROWS, same) == (0, 0)
     assert review_counts(ROWS, SWAP) == (0, 1)
 
 
-def test_effective_picks_report_the_anchor_they_came_from():
-    """What lets the export say which frames a human moved."""
+def test_effective_picks_report_anchor():
     assert [(a, p) for a, p, _ in effective_picks(ROWS, SWAP)] == [(0, 1), (2, 2)]
 
 
-def test_effective_picks_survive_a_renumbered_manifest():
-    """The point of keying on names: shift every row and the swap holds.
-    write_manifest renumbers the anchor column with the rows, so the reversed
-    fixture points y045_00001 at its anchor's new index."""
+def test_effective_picks_survive_renumbering():
+    """write_manifest renumbers the anchor column, so the reversed fixture points
+    y045_00001 at its anchor's new index."""
     shifted = [dict(r, pano_idx=str(int(r["pano_idx"]) + 1)) for r in ROWS[::-1]]
     shifted[1]["anchor"] = "2"
     picks = effective_picks(shifted, SWAP)
     assert [r["path"] for _, _, r in picks] == ["y135_00002.jpg", "y045_00001.jpg"]
 
 
-def test_a_pick_that_left_the_group_falls_back_to_the_anchor():
-    """A reselect can promote an absorbed member to its own anchor. Honouring
-    the stored pick then would export that frame twice under one name, so the
-    pick only holds while the picked face is still in the group."""
+def test_pick_left_group_falls_back():
+    """Honouring a pick that left its group would export one frame under two names."""
     regrouped = [dict(r) for r in ROWS]
     regrouped[1].update(kept="1", anchor="", cosine="")   # y045_00001 promoted
     picks = effective_picks(regrouped, SWAP)
@@ -89,7 +83,7 @@ def test_a_pick_that_left_the_group_falls_back_to_the_anchor():
     assert review_counts(regrouped, SWAP) == (0, 0)
 
 
-def test_a_pick_that_moved_to_another_group_falls_back_too():
+def test_pick_moved_group_falls_back():
     regrouped = [dict(r) for r in ROWS]
     regrouped[1]["anchor"] = "2"                          # absorbed elsewhere
     assert [(a, p) for a, p, _ in effective_picks(regrouped, SWAP)] == \
@@ -103,9 +97,7 @@ def test_review_counts_separate_drops_from_swaps():
     assert review_counts(ROWS, DROP) == (1, 0)
 
 
-def test_a_decision_on_a_face_that_is_no_longer_an_anchor_does_not_count():
-    """A re-run can move the anchors. The log keeps the click; the funnel
-    must not, or it reports a drop the export cannot show."""
+def test_decision_on_demoted_anchor_ignored():
     stale = {"y045_00001.jpg": {"pick": None, "dropped": True}}   # now absorbed
     assert review_counts(ROWS, stale) == (0, 0)
 
@@ -116,18 +108,23 @@ def jpg_bytes() -> bytes:
     return arr.tobytes()
 
 
+def zipped(*args, **kw) -> bytes:
+    buf = BytesIO()
+    write_zip(buf, *args, **kw)
+    return buf.getvalue()
+
+
 def test_stamp_exif_roundtrip_no_recompression():
     payload = {"walk": "w", "t_sec": 0.5}
     stamped = stamp_exif(jpg_bytes(), payload)
     comment = piexif.load(stamped)["Exif"][piexif.ExifIFD.UserComment]
     assert json.loads(piexif.helper.UserComment.load(comment)) == payload
-    # pixels untouched: decoded images are identical
     orig = cv2.imdecode(np.frombuffer(jpg_bytes(), np.uint8), cv2.IMREAD_COLOR)
     after = cv2.imdecode(np.frombuffer(stamped, np.uint8), cv2.IMREAD_COLOR)
     assert (orig == after).all()
 
 
-def test_build_zip_contents_and_determinism(tmp_path):
+def test_zipped_contents_and_determinism(tmp_path):
     faces = tmp_path / "faces"
     faces.mkdir()
     for r in ROWS:
@@ -135,7 +132,7 @@ def test_build_zip_contents_and_determinism(tmp_path):
     meta = {"site": "GCMR", "building": "t2", "shotDate": "2026-08-01"}
     args = ("walk9", tmp_path, ROWS, {}, meta, "dinov3", PipelineParams())
 
-    data = build_zip(*args)
+    data = zipped(*args)
     z = zipfile.ZipFile(BytesIO(data))
     names = z.namelist()
     assert "frames/gcmr_t2_walk9_t0000.5_y045.jpg" in names
@@ -147,7 +144,7 @@ def test_build_zip_contents_and_determinism(tmp_path):
     assert walk["pipeline"]["dedup"]["tau"] == 0.94
     assert walk["pipeline"]["embed_model_used"] == "dinov3"
 
-    assert build_zip(*args) == data  # byte-identical re-export
+    assert zipped(*args) == data
 
 
 def written(tmp_path, state, decisions=None):
@@ -155,7 +152,7 @@ def written(tmp_path, state, decisions=None):
     faces.mkdir(exist_ok=True)
     for r in ROWS:
         (faces / r["path"]).write_bytes(jpg_bytes())
-    data = build_zip("walk9", tmp_path, ROWS, state, {}, "dinov3",
+    data = zipped("walk9", tmp_path, ROWS, state, {}, "dinov3",
                      PipelineParams(), decisions)
     return zipfile.ZipFile(BytesIO(data))
 
@@ -164,22 +161,33 @@ LOG = [{"walkId": "walk9", "anchor": "y045_00000.jpg", "action": "pick",
         "pick": "y045_00001.jpg", "createdAt": "2026-08-05 09:00:00"}]
 
 
-def test_the_decision_log_leaves_with_the_frames(tmp_path):
+def test_decision_log_exported(tmp_path):
     z = written(tmp_path, SWAP, LOG)
     d = json.loads(z.read("decisions.json"))
     assert d["overridden"] == 1 and d["dropped"] == 0
-    # the walk is named once at the top, not repeated on every row
+    # walkId is not repeated on every row
     assert d["log"] == [{"anchor": "y045_00000.jpg", "action": "pick",
                          "pick": "y045_00001.jpg",
                          "createdAt": "2026-08-05 09:00:00"}]
 
 
-def test_an_untouched_walk_still_says_so(tmp_path):
+def test_empty_export_manifest_header(tmp_path):
+    def header(z):
+        return z.read("manifest.csv").decode().splitlines()[0]
+
+    everything = written(tmp_path, {})
+    nothing = written(tmp_path, {r["path"]: {"pick": None, "dropped": True}
+                                 for r in ROWS})
+    assert header(nothing) == header(everything) == ",".join(MANIFEST_FIELDS)
+    assert json.loads(nothing.read("walk.json"))["frames"] == 0
+
+
+def test_untouched_walk_logged(tmp_path):
     d = json.loads(written(tmp_path, {}).read("decisions.json"))
     assert d == {"walk": "walk9", "dropped": 0, "overridden": 0, "log": []}
 
 
-def test_every_frame_says_whether_a_human_moved_it(tmp_path):
+def test_every_frame_logs_human_flag(tmp_path):
     z = written(tmp_path, SWAP, LOG)
     rows = list(csv.DictReader(io.StringIO(z.read("manifest.csv").decode())))
     assert [r["overridden"] for r in rows] == ["1", "0"]
@@ -188,10 +196,10 @@ def test_every_frame_says_whether_a_human_moved_it(tmp_path):
     assert json.loads(piexif.helper.UserComment.load(comment))["overridden"] is True
 
 
-def test_the_log_does_not_break_determinism(tmp_path):
+def test_log_deterministic(tmp_path):
     args = ("walk9", tmp_path, ROWS, SWAP, {}, "dinov3", PipelineParams(), LOG)
     faces = tmp_path / "faces"
     faces.mkdir(exist_ok=True)
     for r in ROWS:
         (faces / r["path"]).write_bytes(jpg_bytes())
-    assert build_zip(*args) == build_zip(*args)
+    assert zipped(*args) == zipped(*args)

@@ -1,19 +1,8 @@
-"""Stage 4: frozen-backbone image embeddings.
+"""Frozen-backbone image embeddings, L2-normalised so dot product is cosine.
 
-The embedder sits behind a small protocol so the backbone stays swappable
-without touching dedup or the store. The default is DINOv3 ViT-B/16, CLS
-token: the PoC showed mean-pooled patch tokens collapse on bare concrete
-(median random-pair cosine 0.95).
-
-Preprocessing (INTER_AREA resize, mean/std from the timm config) comes from
-the model's own config, so it follows the backbone rather than being fixed.
-
-Cosines are not comparable between backbones: each one has its own scale for
-"the same thing", which is what the calibration stage measures. So a swap
-re-measures, and the threshold moves with it.
-
-Embeddings are L2-normalised float32, so dot product == cosine similarity
-everywhere downstream.
+Default is DINOv3 ViT-B/16 at the CLS token. Mean-pooled patch tokens collapse
+on bare concrete (median random-pair cosine 0.95). Cosines are not comparable
+across backbones; calibration re-measures the threshold per walk.
 """
 
 from itertools import batched
@@ -39,11 +28,6 @@ def l2_normalise(x: np.ndarray) -> np.ndarray:
 
 
 class TimmEmbedder:
-    """Any timm ViT, named by params.model_name, loaded lazily so importing
-    this module stays cheap. The backbone is the swappable part of the
-    pipeline; nothing downstream knows which one ran except by the name
-    recorded alongside the vectors."""
-
     def __init__(self, params: EmbedParams = EmbedParams()):
         self.params = params
         self._model = None
@@ -60,10 +44,10 @@ class TimmEmbedder:
                                   num_classes=0, img_size=self.params.img_size)
         model.eval().to(device)
         cfg = timm.data.resolve_model_data_config(model)
-        self._model = model
         self._device = device
         self._mean = np.array(cfg["mean"], dtype=np.float32)
         self._std = np.array(cfg["std"], dtype=np.float32)
+        self._model = model
 
     def embed(self, images: list[np.ndarray]) -> np.ndarray:
         import torch
@@ -81,5 +65,5 @@ class TimmEmbedder:
             x = torch.from_numpy(arr).permute(0, 3, 1, 2).to(self._device)
             with torch.no_grad():
                 tokens = self._model.forward_features(x)
-            out.append(tokens[:, 0].cpu().numpy())  # CLS token
+            out.append(tokens[:, 0].cpu().numpy())
         return l2_normalise(np.concatenate(out))

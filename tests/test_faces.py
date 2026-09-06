@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from accio.core.faces import gnomonic_maps, render_face, render_faces
 from accio.core.params import FaceParams
@@ -40,3 +41,17 @@ def test_render_faces_returns_all_yaws():
     faces = render_faces(synthetic_pano(), PARAMS)
     assert set(faces) == {45, 135, 225, 315}
     assert all(f.shape == (256, 256, 3) for f in faces.values())
+
+
+@pytest.mark.parametrize("fov", [100.0, 110.0])
+def test_face_edges_half_fov_from_heading(fov):
+    """fov 90 is left out: yaw 135's right edge lands on the pano seam."""
+    params = FaceParams(size=256, fov_deg=fov)
+    pano = synthetic_pano()
+    c = params.size // 2
+    for yaw in params.yaws:
+        face = render_face(pano, yaw, params)
+        for col, side in ((0, -1), (params.size - 1, 1)):
+            expected = ((yaw + side * fov / 2 + 180) % 360) / 360.0
+            off = abs(face[c, col, 2] / 255.0 - expected) % 1.0
+            assert min(off, 1.0 - off) < 0.02, f"yaw {yaw} col {col}"

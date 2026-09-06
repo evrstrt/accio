@@ -1,12 +1,10 @@
-"""Step 3: reviewed picks -> a self-contained zip for annotation.
+"""Reviewed picks -> a self-contained zip for annotation.
 
-The app is a processing tool, not a store: everything the dataset needs
-travels in the zip. Each frame carries the walk metadata and the exact
-pipeline settings in its EXIF UserComment (JSON, no recompression), the
-manifest repeats them per row, and walk.json holds them once. Filenames
-are deterministic ({site}_{building}_{walk}_t012.5_y090.jpg) and zip
-entries use a fixed timestamp, so the same review always exports
-byte-identical archives.
+Each frame carries the walk metadata and pipeline settings in its EXIF
+UserComment (JSON, no recompression); the manifest repeats them per row and
+walk.json holds them once. Filenames are deterministic
+({site}_{building}_{walk}_t012.5_y090.jpg) and zip entries use a fixed
+timestamp, so the same review exports byte-identical archives.
 """
 
 import csv
@@ -22,7 +20,10 @@ import piexif.helper
 
 from .params import PipelineParams
 
-ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)  # fixed entry mtime: determinism over honesty
+ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)  # fixed entry mtime, for byte-identical archives
+MANIFEST_FIELDS = ("file", "walk", "site", "building", "stage", "shot_date",
+                   "t_sec", "yaw", "pano_idx", "source_face", "pick_idx",
+                   "overridden", "classes")
 
 
 def slug(s: str) -> str:
@@ -42,11 +43,9 @@ def resolve_pick(rows: list[dict], idx_of: dict[str, int], anchor_idx: int,
                  pick: str | None) -> int:
     """The manifest index a stored pick means today, or the anchor.
 
-    A pick only means something while the picked face is still in the anchor's
-    group. A reselect regroups without touching the decisions log, so a stored
-    pick can now name a face that became its own anchor or moved to another
-    group; honouring it would export that frame twice under one name. Such a
-    pick falls back to the anchor, same as one naming a face that is gone.
+    A reselect regroups without touching the decisions log, so a pick may now
+    name a face outside the anchor's group; honouring it would export that
+    frame twice under one name.
     """
     if not pick:
         return anchor_idx
@@ -60,11 +59,8 @@ def effective_picks(rows: list[dict],
                     state: dict[str, dict]) -> list[tuple[int, int, dict]]:
     """(anchor_idx, pick_idx, manifest_row) per surviving group, in walk order.
 
-    A group survives unless dropped in review; its exported frame is the
-    reviewer's pick, defaulting to the anchor, which dedup already chose as the
-    sharpest member. Review state is keyed by face name, so it still resolves
-    after a re-run renumbers the manifest. The anchor comes back too, so the
-    export can say which frames a human moved.
+    Review state is keyed by face name, so it survives a re-run renumbering
+    the manifest.
     """
     idx_of = {r["path"]: i for i, r in enumerate(rows)}
     picks = []
@@ -82,9 +78,8 @@ def effective_picks(rows: list[dict],
 def review_counts(rows: list[dict], state: dict[str, dict]) -> tuple[int, int]:
     """(dropped, overridden) among the groups that currently exist.
 
-    A re-run can change which faces are anchors. Decisions on faces that are no
-    longer anchors are kept in the log but do not count against this run, or
-    the funnel would report drops the export cannot show.
+    Decisions on faces that are no longer anchors stay in the log but are not
+    counted.
     """
     idx_of = {r["path"]: i for i, r in enumerate(rows)}
     dropped = overridden = 0
@@ -113,20 +108,15 @@ def write_zip(dest, walk_id: str, walk_dir: Path, rows: list[dict],
               state: dict[str, dict], meta: dict, embed_model: str,
               params: PipelineParams, decisions: list[dict] | None = None,
               segmentation: dict | None = None) -> int:
-    """The zip is the deliverable, so everything the dataset needs is in it:
-    the frames, what produced them, and what a human changed by hand.
+    """Write the archive to `dest` (a path or open binary file); returns the
+    frame count.
 
-    Writes to `dest` (a path or an open binary file) and returns the frame
-    count. Writing rather than returning bytes keeps the peak at one frame
-    instead of the whole archive: measured 37 MB for a 4.7-minute walk, which
-    is ~235 MB for a half-hour one, per export, times however many reviewers
-    press the button at once.
+    Streaming keeps the peak at one frame: measured 37 MB for a 4.7-minute
+    walk, ~235 MB for a half-hour one.
     """
     prefix = name_prefix(walk_id, meta)
     pipeline = dict(asdict(params), embed_model_used=embed_model)
     common = {"walk": walk_id, **meta, "pipeline": pipeline}
-    # a pre-annotation, if the walk has one: the mask travels beside its frame
-    # under the same name, and the class mix goes in the manifest row
     classes = (segmentation or {}).get("classes", {})
 
     manifest = []
@@ -153,7 +143,6 @@ def write_zip(dest, walk_id: str, walk_dir: Path, rows: list[dict],
                 "stage": meta.get("stage", ""), "shot_date": meta.get("shotDate", ""),
                 "t_sec": t_sec, "yaw": yaw, "pano_idx": int(r["pano_idx"]),
                 "source_face": r["path"], "pick_idx": pick_idx,
-                # the one column a pipeline hash cannot reproduce
                 "overridden": int(overridden),
                 # "wall 0.58; ceiling 0.28; floor 0.10", largest first
                 "classes": "; ".join(f"{k} {v:.2f}" for k, v in
@@ -161,15 +150,12 @@ def write_zip(dest, walk_id: str, walk_dir: Path, rows: list[dict],
             })
 
         s = io.StringIO()
-        w = csv.DictWriter(s, fieldnames=list(manifest[0].keys()) if manifest else
-                           ["file", "walk"])
+        w = csv.DictWriter(s, fieldnames=MANIFEST_FIELDS)
         w.writeheader()
         w.writerows(manifest)
         write("manifest.csv", s.getvalue())
 
-        # Review is the only stage a re-run cannot reproduce, so its log leaves
-        # with the frames: a pattern in the overrides is evidence the auto-pick
-        # rule needs changing, and that evidence is worth nothing here.
+        # review is the one stage a re-run cannot reproduce, so its log ships
         dropped, overridden = review_counts(rows, state)
         write("decisions.json", json.dumps({
             "walk": walk_id, "dropped": dropped, "overridden": overridden,
@@ -183,11 +169,3 @@ def write_zip(dest, walk_id: str, walk_dir: Path, rows: list[dict],
                                        "overridden": overridden,
                                        "segmented": bool(classes)}, indent=1))
     return len(manifest)
-
-
-def build_zip(*args, **kw) -> bytes:
-    """The whole archive in memory. For tests and for anything small enough
-    to know it is small; the route writes to disk instead."""
-    buf = io.BytesIO()
-    write_zip(buf, *args, **kw)
-    return buf.getvalue()

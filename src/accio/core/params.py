@@ -1,21 +1,13 @@
-"""Pipeline parameters with the defaults validated in the dedup PoC (June 2026).
-
-Every stage takes its params object explicitly; nothing reads globals. Change a
-default here only with evidence (the PoC's borderline sheets, or an override
-pattern from review).
-"""
+"""Pipeline parameters. Defaults come from measurements on real walks; change
+them with evidence."""
 
 from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
 class ExtractParams:
-    """Dual-fisheye .insv -> decimated equirect panoramas via the Insta360
-    MediaSDK container (optflow stitch + flowstate horizon levelling; replaces
-    ffmpeg v360, which left parallax seams and tilted horizons)."""
-
-    fps: float = 2.0          # walking pace + full sphere per frame
-    pano_width: int = 3840    # native resolution; height is width / 2
+    fps: float = 2.0
+    pano_width: int = 3840    # height is width / 2
     sdk_image: str = "insta360-mediasdk:3.1.1"
 
     @property
@@ -25,73 +17,52 @@ class ExtractParams:
 
 @dataclass(frozen=True)
 class FaceParams:
-    """Equirect panorama -> gnomonic side faces."""
-
     fov_deg: float = 110.0    # 4 x 110 at 90 spacing = 20 deg overlap per seam
     size: int = 1024
+    # offset 45 keeps the stitch seams (yaw +-90) inside the overlap. No
+    # top/bottom faces: zenith is soffit edge-on, nadir is the helmet.
     yaws: tuple[int, ...] = (45, 135, 225, 315)
-    # yaw offset 45 keeps the stitch seams (yaw +-90) inside the overlapped
-    # face margins; no top/bottom faces: zenith is slab soffit seen edge-on,
-    # nadir is the helmet
 
 
 @dataclass(frozen=True)
 class GateParams:
-    """A valve on footage that arrived broken. Select owns quality.
+    """Drops panoramas that arrived broken. Quality is Select's job.
 
-    One threshold, because a panorama score mixes all four headings and cannot
-    tell a plain wall from a smeared one. It catches the single case nothing
-    downstream can: a stretch smeared right through, whose frames group with
-    each other because blur is what they share, leaving Select to anchor that
-    group on a smear because a smear is the best it has.
-
-    Measured on both walks, this vetoes nothing: the lowest-scoring panorama on
-    7th Floor is at 0.204 of the walk median and on 0717 nothing was dropped at
-    all. That is the intended result. Raising it does not sharpen the export,
-    it deletes coverage.
+    On both reference walks this vetoes nothing (lowest panorama at 0.204 of
+    the median). Raising it deletes coverage, not blur.
     """
 
-    dead: float = 0.15        # of the walk's median sharpness; under it a
-                              # panorama is not worth cutting faces from
-    band: tuple[float, float] = (0.25, 0.75)  # central latitude band; poles are
-                              # projection stretch + helmet
+    dead: float = 0.15        # fraction of the walk's median sharpness
+    band: tuple[float, float] = (0.25, 0.75)  # latitude band scored; poles are
+                                              # projection stretch + helmet
 
 
-# The backbones a walk can be embedded with. Input size is not free: it has to
-# divide by the model's patch size, so each one carries its own. Every entry
-# is a frozen ViT read at its CLS token, which keeps the cosines comparable in
-# kind even though their scales differ (which is what calibration measures).
+# input size has to divide by the patch size, so it travels with the model
 BACKBONES: dict[str, int] = {
-    "vit_base_patch16_dinov3.lvd1689m": 384,    # 24x24 patches
-    "vit_small_patch16_dinov3.lvd1689m": 384,   # same grid, a third the cost
-    "vit_base_patch14_dinov2.lvd142m": 392,     # 28x28, patch 14
+    "vit_base_patch16_dinov3.lvd1689m": 384,
+    "vit_small_patch16_dinov3.lvd1689m": 384,
+    "vit_base_patch14_dinov2.lvd142m": 392,
     "vit_base_patch16_clip_384.laion2b_ft_in12k_in1k": 384,
 }
 
 
 @dataclass(frozen=True)
 class EmbedParams:
-    """Frozen ViT embeddings, CLS token (patch-mean collapses on bare
-    concrete: median random-pair cosine 0.95)."""
-
     model_name: str = "vit_base_patch16_dinov3.lvd1689m"
-    img_size: int = 384       # 24x24 patch grid, enough for grey-on-grey
+    img_size: int = 384
     batch_size: int = 8
-    device: str | None = None # None = auto: cuda, then mps, then cpu
+    device: str | None = None  # None: cuda, then mps, then cpu
+
+    def __post_init__(self):
+        if self.model_name in BACKBONES:
+            object.__setattr__(self, "img_size", BACKBONES[self.model_name])
 
 
-# The segmenters, and which kind each one is.
-#
-# "semantic" models label every pixel from a fixed list. All the ones here are
-# ADE20K, the only public label set with an interior's vocabulary, and they are
-# bounded by it: it has wall, floor, ceiling, door and window, and no rebar,
-# formwork or conduit at all. Measured on ASHV bare RCC (Aug 2026), Mask2Former
-# traces the wall/floor junction down a corridor that SegFormer-B4 reads as
-# wall, which is why it is the default.
-#
-# "open" models take the classes as text, so the vocabulary is whatever you
-# write. That is the only way to ask for the things a site is actually made of,
-# at the cost of finding instances rather than covering the frame.
+# "semantic" models label every pixel from ADE20K's fixed list (wall, floor,
+# ceiling, door, window; no rebar, formwork or conduit). Mask2Former traces the
+# wall/floor junction on bare RCC where SegFormer-B4 reads floor as wall, hence
+# the default. "open" models take the classes as text and find instances
+# rather than covering the frame.
 SEGMENTERS: dict[str, str] = {
     "facebook/mask2former-swin-large-ade-semantic": "semantic",
     "shi-labs/oneformer_ade20k_swin_large": "semantic",
@@ -100,8 +71,6 @@ SEGMENTERS: dict[str, str] = {
     "IDEA-Research/grounding-dino-base": "open",
 }
 
-# What a site is made of, in the words someone would use for it. Only the open
-# models read this; a semantic one is stuck with the list it was trained on.
 SITE_CLASSES: tuple[str, ...] = (
     "rebar", "formwork", "scaffolding", "concrete column", "concrete beam",
     "concrete slab", "block wall", "electrical conduit", "pipe", "duct",
@@ -111,17 +80,12 @@ SITE_CLASSES: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class SegmentParams:
-    """What is in each kept frame, annotated before anyone labels it.
+    """Runs on the kept frames only, after Select, and never drops a frame."""
 
-    Runs on the frames Select kept rather than every face: it is the export
-    that gets annotated, and inference is the expensive part. It never drops a
-    frame, so a wrong mask costs a correction and not a candidate.
-    """
-
-    enabled: bool = False     # opt-in: it pulls a model and takes real time
+    enabled: bool = False
     model_name: str = "facebook/mask2former-swin-large-ade-semantic"
     classes: tuple[str, ...] = SITE_CLASSES   # open-vocabulary models only
-    threshold: float = 0.2    # detection confidence, same
+    threshold: float = 0.2                    # detection confidence, same
     device: str | None = None
 
     @property
@@ -131,74 +95,41 @@ class SegmentParams:
 
 @dataclass(frozen=True)
 class CalibParams:
-    """Two measurements per walk, so the threshold is a stated risk.
+    """Sets tau from the walk's own far-apart pairs.
 
-    The reference is a kept face against the raw frame straight after it: the
-    ceiling for "identical", and a health check on the stitch, the exposure and
-    the backbone. It does not set the threshold. Measured on GCMR, ASHV and
-    114811 (Aug 2026) it sits at 0.966 to 0.984, while faces one gated interval
-    apart score 0.70 to 0.91, so a threshold hung off the reference merges 4%
-    to 15% of genuinely adjacent pairs and select does almost nothing.
+    Faces at one heading more than far_seconds apart are somewhere else, so
+    the fraction of those a threshold merges is its false-merge risk. tau is
+    the (100 - false_merge_pct) percentile of their cosines.
 
-    The far distribution sets it instead. Faces at one heading more than
-    far_seconds apart are somewhere else, so how many of those a threshold
-    merges is the risk it carries, and the budget names it directly.
+    The reference (a kept face against the raw frame straight after it) is
+    measured as a health check on the stitch and backbone but does not set
+    tau: it sits at 0.966-0.984 while adjacent gated faces score 0.70-0.91,
+    so a threshold hung off it merges almost nothing.
 
-    The budget is generous on purpose. Merging two frames costs nothing
-    permanent: render_faces writes every face and the manifest only marks which
-    ones were kept, so an over-cut walk comes back with a lower budget. An
-    under-cut one has already been labelled, and that money does not come back.
-    Duplicates are also the expensive kind of wrong: an operator standing in a
-    stairwell for 30 seconds puts fifteen near-identical stairwell frames into
-    training and skews the model, not just the invoice.
-
-    What it cannot do is rescue a self-similar walk. Measured on 114811 (Aug
-    2026), cutting 148 faces to 67 moves the mean nearest-neighbour cosine in
-    the kept set from 0.949 to 0.904: the frames go, the redundancy stays,
-    because everything there genuinely looks alike. Sampling on distance is the
-    instrument for that. This one only decides what to keep of what was taken.
+    The budget is generous because an over-cut walk is recoverable (every face
+    stays on disk) and an under-cut one has already been labelled twice.
     """
 
-    samples: int = 10             # panoramas the reference is measured on; x4
-    far_seconds: float = 20.0     # apart enough to be a different place
-    false_merge_pct: float = 5.0  # of far pairs allowed to merge; tau is the
-                                  # (100 - this) percentile of them. Cuts 44-59%
-                                  # on real walks, and every frame stays on disk
+    samples: int = 10             # panoramas the reference is measured on
+    far_seconds: float = 20.0
+    false_merge_pct: float = 5.0  # cuts 44-59% on real walks
 
 
 @dataclass(frozen=True)
 class DedupParams:
-    """Greedy cosine dedup, per walk (cross-walk near-duplicates are different
-    walls that look alike).
+    """Calibrated by default: the fixed 0.94 shipped 1637 of 2632 faces on one
+    walk with 98% of them holding a twin above its own threshold. Calibrated
+    values seen so far run 0.837 to 0.944."""
 
-    Calibrated by default, because a cosine threshold is a property of the
-    site and the backbone, not a constant. Measured across the walks on hand,
-    the calibrated value runs from 0.8371 to 0.9438, and the low end is not an
-    outlier: a 2048x1024 pre-stitched walk landed there and, run at the fixed
-    0.94 instead, shipped 1637 of 2632 faces with 98% of them holding a twin
-    above its own threshold. Two frames of the same wall a second apart came
-    to 0.9372 and were kept as separate exports.
+    tau: float = 0.94         # used by the fixed rule; calibration overwrites it
+    rule: str = "calibrated"  # or "fixed", the fallback for a walk too short
+                              # to have a far distribution
 
-    Calibration already runs on every walk and writes calibration.json, so
-    this costs nothing but reading what is already there.
-    """
-
-    tau: float = 0.94         # a starting point, not a measurement: it is what
-                              # the fixed rule uses and where calibration
-                              # writes its answer
-    rule: str = "calibrated"  # from the walk's own far-apart pairs at the
-                              # false-merge budget, written back into tau.
-                              # "fixed" uses tau as given, and is the fallback
-                              # for a walk too short to have a far
-                              # distribution, which apply_rule names.
-
-    # A frame absorbed by nobody has no sharper twin to be swapped for, so it
-    # is the one route by which a smear reaches a labeller. Judged against the
-    # recent norm of its own heading, which is what cancels the wall's texture.
-    # Measured on 7th Floor: 17 of 224 exports are alone, median ratio 0.87
-    # against 1.00 walk-wide, and this bar drops 2 of them.
+    # a group of one has no sharper twin, so it is the one route by which a
+    # smear reaches a labeller. 7th Floor: 17 of 224 exports are alone, and
+    # this floor drops 2 of them.
     solo_floor: float = 0.50  # of its heading's norm; 0 keeps every singleton
-    solo_span: float = 45.0   # seconds either side that norm is taken over
+    solo_span: float = 45.0   # seconds either side the norm is taken over
 
 
 @dataclass(frozen=True)
@@ -213,8 +144,7 @@ class PipelineParams:
 
 
 def from_dict(d: dict) -> PipelineParams:
-    """Rebuild params saved next to a walk. JSON has no tuples, so the fields
-    that are tuples come back as lists and are converted here."""
+    """Rebuild params saved next to a walk; JSON turned the tuples into lists."""
     faces = dict(d.get("faces", {}))
     if "yaws" in faces:
         faces["yaws"] = tuple(faces["yaws"])

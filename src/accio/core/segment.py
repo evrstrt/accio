@@ -1,22 +1,17 @@
-"""Stage 6: what is in each kept frame, before anyone labels it.
+"""Semantic segmentation of the kept frames, as pre-annotation.
 
-A frozen semantic segmenter run over the frames Select kept. ADE20K is the
-only public label set with the vocabulary an interior needs (wall, floor,
-ceiling, door, windowpane, column, stairs, railing), and it is trained on
-finished rooms, so the question was whether bare RCC carries it. Measured on
-GCMR and ASHV footage (Aug 2026): the structure holds up on both, and the
-weak spot is a debris-covered floor, which reads partly as wall because there
-is no visual floor left.
+ADE20K is the only public label set with an interior vocabulary (wall, floor,
+ceiling, door, windowpane, column, stairs, railing). Measured on GCMR and ASHV
+(Aug 2026) the structure holds on bare RCC; a debris-covered floor reads
+partly as wall.
 
-This annotates, it never selects. A mask that is wrong should cost an
-annotator a correction, not cost the dataset a frame.
-
-Masks are written as single-channel PNGs of ADE20K class indices, not colour:
-the index is the label, and a palette is a rendering choice the viewer makes.
+This annotates, it never selects. Masks are single-channel PNGs of class
+indices.
 """
 
 from collections import Counter
 from dataclasses import dataclass
+from itertools import batched
 from pathlib import Path
 from typing import Protocol
 
@@ -26,26 +21,11 @@ import numpy as np
 from .params import SegmentParams
 
 MASK_DIR = "masks"
-# the mask model the open-vocabulary path pairs with its detector
 SAM_MODEL = "facebook/sam-vit-huge"
-# a class has to cover this much of a frame before it is worth naming in the
-# manifest; below it the row becomes a list of single-pixel noise
-MIN_SHARE = 0.01
-# how far a detection's best class has to beat its second before the name is
-# worth writing down. Under it the box found something and the vocabulary
-# cannot say what, which is a different answer from "nothing here".
-MIN_MARGIN = 0.05
-# Grounding DINO's text side is a fixed 256 positions; a longer prompt runs off
-# the end and those classes would silently never score
-MAX_TEXT = 256
-# frames per forward pass. Small because these are 1024 square and the heads
-# are large; the point is that it is more than one, which is what it was.
-SEG_BATCH = 4
-
-
-def _chunks(xs, n):
-    for i in range(0, len(xs), n):
-        yield xs[i:i + n]
+MIN_SHARE = 0.01     # a class covering less of a frame is not named in the manifest
+MIN_MARGIN = 0.05    # the best class must beat the runner-up by this to be named
+MAX_TEXT = 256       # Grounding DINO's text positions; classes past it never score
+SEG_BATCH = 4        # frames per forward pass; they are 1024 square
 
 
 @dataclass(frozen=True)
@@ -62,7 +42,7 @@ class Segmenter(Protocol):
 
 def shares(seg: np.ndarray, labels: dict[int, str],
            floor: float = MIN_SHARE) -> dict[str, float]:
-    """What each class covers, largest first, noise dropped."""
+    """Fraction of the frame per class, largest first, under `floor` dropped."""
     total = seg.size
     counts = Counter(seg.flatten().tolist())
     out = {labels.get(i, str(i)): round(n / total, 4)
@@ -71,7 +51,8 @@ def shares(seg: np.ndarray, labels: dict[int, str],
 
 
 def write_mask(path: Path, seg: np.ndarray) -> None:
-    """Class indices, not colours: PNG is lossless so the index survives."""
+    if seg.max() >= 256:
+        raise ValueError(f"class index {int(seg.max())} does not fit an 8-bit mask")
     cv2.imwrite(str(path), seg.astype(np.uint8))
 
 
@@ -82,8 +63,7 @@ def pick_device(want: str | None) -> str:
 
 
 def to_device(batch, device: str):
-    """MPS has no float64, and several processors emit it for boxes and target
-    sizes. Casting beats dropping the whole model back to the CPU."""
+    """MPS has no float64; several processors emit it for boxes and target sizes."""
     import torch
     for k, v in list(batch.items()):
         if torch.is_tensor(v) and v.dtype == torch.float64:
@@ -92,12 +72,7 @@ def to_device(batch, device: str):
 
 
 class SemanticSegmenter:
-    """A fixed label set over every pixel: SegFormer, Mask2Former, OneFormer.
-
-    They are three different heads with three different classes in
-    transformers, but one output shape, so the stage above does not care which
-    is loaded. Weights load lazily; importing this module stays cheap.
-    """
+    """SegFormer, Mask2Former or OneFormer; one output shape. Weights load lazily."""
 
     def __init__(self, params: SegmentParams, batch: int = SEG_BATCH):
         self.params = params
@@ -131,16 +106,11 @@ class SemanticSegmenter:
         if self._model is None:
             self._load()
         out = []
-        # One forward per batch, not per image. The caller already gathers 64
-        # frames and used to hand them to a loop, so the batching was cosmetic
-        # and every frame paid the full launch and post-processing overhead.
-        for chunk in _chunks(images, self.batch):
+        for chunk in batched(images, self.batch):
             task = {"task_inputs": ["semantic"] * len(chunk)} if self._task else {}
             batch = self._proc(images=list(chunk), return_tensors="pt", **task)
             with self.torch.no_grad():
                 pred = self._model(**to_device(batch, self._device))
-            # each mask has to line up with the frame it annotates, so the
-            # processor scales them back to their own sizes
             segs = self._proc.post_process_semantic_segmentation(
                 pred, target_sizes=[im.shape[:2] for im in chunk])
             out += [s.cpu().numpy().astype(np.int32) for s in segs]
@@ -148,10 +118,9 @@ class SemanticSegmenter:
 
 
 def prompt_spans(classes: tuple[str, ...]) -> tuple[str, list[tuple[int, int]]]:
-    """The prompt Grounding DINO is given, and where each class sits in it.
+    """The Grounding DINO prompt and each class's character span in it.
 
-    Character spans, because the tokenizer reports offsets in characters and
-    that is the only handle on which token belongs to which class.
+    Character spans because the tokenizer reports offsets in characters.
     """
     prompt, spans, at = "", [], 0
     for c in classes:
@@ -162,24 +131,13 @@ def prompt_spans(classes: tuple[str, ...]) -> tuple[str, list[tuple[int, int]]]:
 
 
 class OpenVocabSegmenter:
-    """Classes as text: Grounding DINO scores what a phrase names, SAM turns
-    each box into a mask.
+    """Grounding DINO scores boxes against text classes; SAM turns each box
+    into a mask. Pixels nothing named stay class 0.
 
-    This finds things rather than covering the frame, so the mask has a
-    background where nothing was named.
-
-    Two things it deliberately does not do. It does not read the decoded label
-    string: post_process_grounded_object_detection runs every token over its
-    threshold through get_phrases_from_posmap and decodes them as one string,
-    so a detection comes back as "window opening door opening" and the score is
-    a max over all 256 text positions rather than over the class that was
-    found. Instead each class is scored against its own token span, which is
-    unambiguous and is the number the model actually computed.
-
-    And it does not paint by confidence. On bare RCC the large surfaces are the
-    confident detections, so painting the strongest last buried a conduit
-    inside a wall and the object ceased to exist. Smallest mask wins instead,
-    which is the only order that survives one thing being inside another.
+    Classes are scored against their own token spans rather than through
+    post_process_grounded_object_detection, which decodes every token over
+    threshold into one label string ("window opening door opening") and takes
+    the score as a max over all 256 text positions.
     """
 
     def __init__(self, params: SegmentParams):
@@ -200,13 +158,12 @@ class OpenVocabSegmenter:
         self._sp = SamProcessor.from_pretrained(SAM_MODEL)
         self._sam = SamModel.from_pretrained(SAM_MODEL).eval().to(self._device)
         self._model = True
-        # class 0 is "nothing named here", so the phrases start at 1
         self._labels = {0: "unlabelled"}
         self._labels.update(dict(enumerate(self.params.classes, start=1)))
         self._prompt, self._tokens = self._spans()
 
     def _spans(self) -> tuple[str, list[list[int]]]:
-        """Which text positions carry each class, in prompt order."""
+        """Token positions of each class, in prompt order."""
         prompt, spans = prompt_spans(self.params.classes)
         offsets = self._gp.tokenizer(prompt, return_offsets_mapping=True,
                                      truncation=True, max_length=MAX_TEXT
@@ -223,14 +180,10 @@ class OpenVocabSegmenter:
         return prompt, tokens
 
     def _named(self, det, size: tuple[int, int]):
-        """Every detection as (score, box, class), scored per class.
+        """(score, box, class) per detection over threshold.
 
-        A class scores the mean alignment over its own tokens, not the max.
-        Max is the usual convention and it is wrong the moment two classes
-        share a word: "concrete column" and "concrete beam" both contain
-        "concrete", so if that token lights up they tie at its value and the
-        word that tells them apart never enters the number. The mean spends the
-        shared evidence on both and lets the distinctive token decide.
+        A class scores the mean over its tokens, not the max: under max,
+        "concrete column" and "concrete beam" tie on "concrete".
         """
         from transformers.image_transforms import center_to_corners_format
 
@@ -282,13 +235,10 @@ class OpenVocabSegmenter:
 
 def paint(seg: np.ndarray, masks: np.ndarray, classes: list[int],
           scores: list[float]) -> np.ndarray:
-    """Largest mask first, so the smallest ends up on top.
+    """Largest mask first, so a nested object (a conduit on a wall) stays visible.
 
-    Nesting is the normal case here: a pipe runs along a slab, a conduit
-    crosses a wall. Area is the only ordering that keeps the inner thing
-    visible, and it has to be the mask's area rather than the box's, because a
-    long diagonal pipe has a huge box and almost no pixels. Score breaks ties
-    only, never precedence.
+    Mask area, not box area: a diagonal pipe has a huge box and few pixels.
+    Score breaks ties only.
     """
     order = sorted(range(len(classes)),
                    key=lambda i: (-int(masks[i].sum()), scores[i]))

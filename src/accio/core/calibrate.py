@@ -1,28 +1,14 @@
-"""What this walk's own frames score, so the threshold is a stated risk.
+"""Per-walk dedup threshold from a false-merge budget.
 
-A cosine of 0.94 means nothing on its own, and neither does the score of two
-frames a fraction of a second apart. Measured on GCMR, ASHV and 114811 (Aug
-2026), a kept face against the raw frame straight after it scores 0.966 to
-0.984, while faces one gated interval apart, which is what dedup is actually
-asked to judge, score 0.70 to 0.91. A threshold set just under the first
-number merges 4% to 15% of genuinely adjacent pairs. It cuts nothing.
+Faces at one heading more than far_seconds apart are taken to be different
+places; tau is the percentile of their cosines that merges false_merge_pct of
+them. Measured on GCMR, ASHV and 114811 (Aug 2026): a kept face against the
+raw frame after it scores 0.966-0.984, faces one gated interval apart 0.70-0.91,
+so a threshold set from the near end merges 4-15% of adjacent pairs.
 
-So the threshold hangs off the other end: pairs at one heading far enough
-apart in time to be somewhere else. How many of those a threshold merges is
-the risk it carries, so that is the knob, as a budget, and tau is whatever
-meets it here. It needs no stitching, because those faces are already
-rendered and already embedded.
-
-The budget runs generous. Merging costs nothing permanent, since every face
-stays in faces/ and the manifest only records which were kept, so a walk cut
-too hard comes back with a lower budget. A walk cut too softly has already
-been labelled twice over, and that is the money and the class balance both.
-
-The reference is still measured every run, as the health check it always was:
-a walk whose identical-content ceiling comes back low is a walk where the
-stitch, the exposure or the backbone is misbehaving. It no longer decides
-anything, so when the SDK will not run for it, the run says so and carries on
-rather than inventing a threshold.
+The reference (kept face vs the re-stitched neighbouring frame) is a health
+check only: a low median means the stitch, exposure or backbone is off. If the
+SDK will not run, the record says so and tau is unaffected.
 """
 
 import re
@@ -36,39 +22,33 @@ import numpy as np
 from . import extract, faces as faces_mod
 from .params import CalibParams, PipelineParams
 
-# No guard rail on the threshold itself. It used to be clipped to [0.85, 0.995]
-# on the reasoning that a value outside that was a symptom rather than a
-# measurement, which was true when it came from the identical-content ceiling
-# and always landed near 0.95. Placed against the far pairs it is legitimately
-# much lower on a site whose bays are distinguishable: ASHV measures p99 = 0.81,
-# and clipping that to 0.85 silently overrode the budget with a number nobody
-# asked for. The budget is the guard rail now, and it holds by construction. A
-# broken backbone shows up in the reference, which is what it is for.
-HEALTHY_REFERENCE = 0.95  # a median below this means the reference is suspect
-MIN_FAR = 50              # fewer far pairs than this and a percentile is noise
-FAR_KEPT = 5000           # far cosines stored, so the budget can be re-explored
-                          # without re-measuring; a sorted subsample of this
-                          # size holds every percentile to about 0.0002
+# tau is not clipped: ASHV measures far p99 = 0.81, and a floor of 0.85 would
+# override the budget
+HEALTHY_REFERENCE = 0.95  # a reference median below this is suspect
+MIN_FAR = 50              # fewer far pairs and a percentile is noise
+FAR_KEPT = 5000           # a sorted subsample this size holds every percentile
+                          # to about 0.0002
 CALIB_DIR = "calib"
 
 
 def sample_panos(pano_idx: list[int], n: int) -> list[int]:
-    """Evenly spread through the walk, so one static stretch cannot dominate."""
+    """n panorama indices evenly spread through the walk."""
+    if n <= 0:
+        return []
     uniq = sorted(set(pano_idx))
     if len(uniq) <= n:
         return uniq
-    if n < 2:
+    if n == 1:
         return uniq[:1]
     return [uniq[round(i * (len(uniq) - 1) / (n - 1))] for i in range(n)]
 
 
 def far_cosines(faces: list[tuple[int, float, int, str]], embeddings: np.ndarray,
                 far_seconds: float) -> np.ndarray:
-    """What two different places score, from vectors select already holds.
+    """Cosines between same-yaw faces more than far_seconds apart.
 
-    One heading at a time: two yaws of the same station look unalike for
-    reasons that have nothing to do with being somewhere else, and mixing them
-    in would drag the distribution down and the threshold with it.
+    Same yaw only: two yaws of one station look unalike for other reasons and
+    would drag the distribution down.
     """
     by_yaw: dict[int, list[tuple[float, int]]] = defaultdict(list)
     for i, (_pano, t_sec, yaw, _name) in enumerate(faces):
@@ -85,11 +65,7 @@ def far_cosines(faces: list[tuple[int, float, int, str]], embeddings: np.ndarray
 
 
 def thin(cos: np.ndarray, n: int = FAR_KEPT) -> list[float]:
-    """Sorted and evenly subsampled: a percentile sketch, not the raw cloud.
-
-    A long walk has hundreds of thousands of far pairs and the record only has
-    to answer percentile questions about them.
-    """
+    """Sorted and evenly subsampled to n."""
     cos = np.sort(cos)
     if len(cos) > n:
         cos = cos[np.linspace(0, len(cos) - 1, n).round().astype(int)]
@@ -97,12 +73,7 @@ def thin(cos: np.ndarray, n: int = FAR_KEPT) -> list[float]:
 
 
 def resolve_tau(far: np.ndarray, params: CalibParams) -> float | None:
-    """The threshold that meets the false-merge budget on this walk.
-
-    None when there is not enough of a far distribution to place one, which is
-    a real answer for a short walk: it means use the fixed rule, not that some
-    default is fine here.
-    """
+    """The far-cosine percentile meeting the budget; None with too few far pairs."""
     if len(far) < MIN_FAR:
         return None
     return round(float(np.percentile(far, 100.0 - params.false_merge_pct)), 4)
@@ -110,8 +81,7 @@ def resolve_tau(far: np.ndarray, params: CalibParams) -> float | None:
 
 def record(pairs: list[dict], far: np.ndarray, params: CalibParams,
            gap_seconds: float, reference_error: str = "") -> dict:
-    """The measurement as the UI shows it: the reference pairs, the far
-    distribution the threshold comes from, and what it resolves to."""
+    """The calibration record the UI shows."""
     cos = np.array([p["cosine"] for p in pairs])
     median = round(float(np.median(cos)), 4) if len(cos) else 0.0
     far = np.asarray(far, dtype=float)
@@ -137,8 +107,7 @@ def record(pairs: list[dict], far: np.ndarray, params: CalibParams,
             "min": round(float(cos.min()), 4) if len(cos) else 0.0,
             "n": len(cos),
         },
-        # the reference is a health check now, so "unhealthy" has to mean the
-        # stitch looked wrong, not that the check could not be run at all
+        # a check that did not run is not healthy
         "healthy": bool(len(cos)) and median >= HEALTHY_REFERENCE,
         "referenceError": reference_error,
         "gapSeconds": round(gap_seconds, 4),
@@ -148,13 +117,9 @@ def record(pairs: list[dict], far: np.ndarray, params: CalibParams,
 def calibrate(video: Path, out: Path, faces: list[tuple[int, float, int, str]],
               embeddings: np.ndarray, params: PipelineParams, embedder,
               native_fps: float) -> dict:
-    """Measure both ends: the identical-content ceiling, and what elsewhere
-    scores.
+    """faces is (pano_idx, t_sec, yaw, file name) in embedding order.
 
-    faces is (pano_idx, t_sec, yaw, file name) in embedding order. The far
-    distribution comes straight off the embeddings; only the reference needs
-    the SDK, and if that will not run the record says so and the threshold is
-    unaffected.
+    Only the reference needs the SDK; if that fails the record says so.
     """
     t_of: dict[int, float] = {}
     row_of: dict[tuple[int, int], int] = {}
@@ -169,12 +134,13 @@ def calibrate(video: Path, out: Path, faces: list[tuple[int, float, int, str]],
 
     calib_dir = out / CALIB_DIR
     calib_dir.mkdir(parents=True, exist_ok=True)
-    # a stale set from a run with different samples would otherwise be read
-    # back as though this run had measured it
+    # stale frames from a run with different samples would be read back as this run's
     for old in calib_dir.glob("*.jpg"):
         old.unlink()
     cname = "calib-" + re.sub(r"[^a-zA-Z0-9_.-]", "", out.name)[:40]
     failed = ""
+    # a container still dying holds the name
+    subprocess.run(["docker", "rm", "-f", cname], capture_output=True)
     try:
         subprocess.run(
             extract.sdk_cmd(video, calib_dir, frame_nos, cname, params.extract),
@@ -188,13 +154,17 @@ def calibrate(video: Path, out: Path, faces: list[tuple[int, float, int, str]],
         failed = f"MediaSDK exited {e.returncode}: {tail}" if tail \
             else f"MediaSDK exited {e.returncode}"
 
-    exported = {int(p.stem): p for p in calib_dir.glob("*.jpg") if p.stem.isdigit()}
+    exported = {int(p.stem): p for p in calib_dir.glob("*.jpg")
+                if p.stem.isdigit() and extract.whole_jpeg(p)}
     pairs = []
     for pano, frame_no in zip(chosen, frame_nos):
         stitched = exported.get(frame_no)
         if stitched is None:
             continue
         pano_img = cv2.imread(str(stitched))
+        if pano_img is None:
+            stitched.unlink()
+            continue
         for yaw, img in faces_mod.render_faces(pano_img, params.faces).items():
             row = row_of.get((pano, yaw))
             if row is None:
@@ -207,7 +177,7 @@ def calibrate(video: Path, out: Path, faces: list[tuple[int, float, int, str]],
                 "face": faces[row][3], "neighbour": name,
                 "cosine": round(float(vec @ embeddings[row]), 4),
             })
-        stitched.unlink()          # the panorama was scratch; the faces are not
+        stitched.unlink()          # the panorama was scratch; the faces stay
 
     if not pairs and not failed:
         failed = f"MediaSDK exported none of {len(frame_nos)} reference frames"
